@@ -1,0 +1,271 @@
+create table public.horses (
+  horse_id text not null, -- 말 고유 ID (예: H001)
+  name text null,         -- 말 이름 (예: 번개)
+  age integer null,       -- 나이 (예: 4세)
+  gender text null,       -- 성별 (수컷/암컷)
+  breed text null,        -- 품종 (예: Thoroughbred)
+  rank text null,         -- 말의 실력 등급(예. 1등급, 국산마)
+  inserted_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone null default now(),
+  constraint horses_pkey primary key (horse_id)
+) TABLESPACE pg_default;
+
+create index IF not exists idx_horses_name on public.horses using btree (name) TABLESPACE pg_default;
+create index IF not exists idx_horses_rank on public.horses using btree (rank) TABLESPACE pg_default;
+
+
+create table public.jockeys (
+  jk_no text not null,    -- 기수번호 (jkNo)
+  name text null,         -- 기수명 (jkName)
+  -- 통산 기록
+  total_races integer null default 0,     -- 통산출주횟수 (rcCntT)
+  total_wins integer null default 0,      -- 통산1위횟수 (ord1CntT)
+  total_seconds integer null default 0,   -- 통산2위횟수 (ord2CntT)
+  total_thirds integer null default 0,    -- 통산3위횟수 (ord2CntT)
+  year_races integer null default 0,      -- 최근1년출주횟수 (rcCntY)
+  year_wins integer null default 0,       -- 최근1년1위횟수 (ord1CntY)
+  year_seconds integer null default 0,    -- 최근1년2위횟수 (ord2CntY)
+  year_thirds integer null default 0,     -- 최근1년3위횟수 (ord2CntY)
+  inserted_at timestamp with time zone null default now(),
+  updated_at timestamp with time zone null default now(),
+  constraint jockeys_pkey primary key (jk_no)
+) TABLESPACE pg_default;
+
+create index IF not exists idx_jockeys_name on public.jockeys using btree (name) TABLESPACE pg_default;
+create index IF not exists idx_jockeys_total_wins on public.jockeys using btree (total_wins desc) TABLESPACE pg_default;
+create index IF not exists idx_jockeys_year_wins on public.jockeys using btree (year_wins desc) TABLESPACE pg_default;
+create index IF not exists idx_jockeys_inserted_at on public.jockeys using btree (inserted_at desc) TABLESPACE pg_default;
+create index IF not exists idx_jockeys_win_rate on public.jockeys using btree (total_wins, total_races) TABLESPACE pg_default;
+
+-- 1. 경마장 테이블
+CREATE TABLE IF NOT EXISTS racetracks (
+    racetrack_id SERIAL PRIMARY KEY,
+    meet_code TEXT NOT NULL UNIQUE,
+    meet_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 4. 조교사 정보 테이블
+CREATE TABLE IF NOT EXISTS trainers (
+    trainer_id TEXT PRIMARY KEY,
+    trainer_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. 마주 정보 테이블
+CREATE TABLE IF NOT EXISTS owners (
+    owner_id TEXT PRIMARY KEY,
+    owner_name TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 6. 경주 기본 정보 테이블
+CREATE TABLE IF NOT EXISTS races (
+    race_id SERIAL PRIMARY KEY,
+    race_date DATE NOT NULL,
+    meet_code TEXT NOT NULL REFERENCES racetracks(meet_code),
+    race_no INTEGER NOT NULL,
+    race_distance INTEGER, -- rcDist
+    race_grade TEXT, -- rcGrade
+    race_age TEXT, -- rcAge (연령조건)
+    race_sex TEXT, -- rcSex (성별조건)
+    race_type TEXT, -- rcCode (대상경주명)
+    race_category TEXT, -- rcRank (마필등급)
+    race_kind TEXT, -- rankKind (경주종류)
+    race_flag TEXT, -- rcFrflag (경주구분)
+    night_race TEXT, -- rcNrace (야간경마여부)
+    track_condition TEXT, -- track (경주로상태)
+    weather TEXT, -- weath (날씨)
+    total_horses INTEGER, -- rcVtdusu (출주두수)
+    planned_horses INTEGER, -- rcPlansu (편성두수)
+    weight_type INTEGER, -- rcBudam (부담구분: 1:마령, 2:별정, 3:핸디캡)
+    race_status TEXT, -- noracefl (경주취소여부)
+    is_divided INTEGER DEFAULT 0, -- divide (분할경주여부)
+    race_days INTEGER, -- rundayth (경주일수)
+    special_code_a TEXT, -- rcSpcba (코드 1~6)
+    special_code_b TEXT, -- rcSpcbu (코드 A,B,C)
+    estimated_odds NUMERIC(5,1), -- rc10dusu (예상배당율)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(race_date, meet_code, race_no)
+);
+
+-- 7. 경주 참가 기록 테이블 (메인 결과 테이블)
+CREATE TABLE IF NOT EXISTS race_entries (
+    entry_id SERIAL PRIMARY KEY,
+    race_date DATE NOT NULL,
+    meet_code TEXT NOT NULL,
+    race_no INTEGER NOT NULL,
+    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
+    jk_no TEXT REFERENCES jockeys(jk_no),
+    trainer_id TEXT REFERENCES trainers(trainer_id),
+    owner_id TEXT REFERENCES owners(owner_id),
+    
+    -- 출전 정보
+    entry_number INTEGER, -- rcChul (출전번호)
+    gate_number INTEGER,
+    horse_weight INTEGER, -- wgHr (마체중)
+    
+    -- 경주 결과
+    final_rank INTEGER, -- rcOrd (순위)
+    finish_time NUMERIC(6,1), -- rcTime (경주기록)
+    
+    -- 순위차 정보
+    diff_total NUMERIC(4,1), -- diffTot (전체 누적 도착차)
+    diff_2nd NUMERIC(4,1), -- rcDiff2 (2순위별누적착자)
+    diff_3rd NUMERIC(4,1), -- rcDiff3 (3순위별누적착자)
+    diff_4th NUMERIC(4,1), -- rcDiff4 (4순위별누적착자)
+    diff_5th NUMERIC(4,1), -- rcDiff5 (5순위별누적착자)
+    
+    -- 상금 정보
+    prize_money BIGINT, -- chaksun (착순상금)
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    FOREIGN KEY (race_date, meet_code, race_no) REFERENCES races(race_date, meet_code, race_no),
+    UNIQUE(race_date, meet_code, race_no, horse_id)
+);
+
+-- 8. 배당률 정보 테이블
+CREATE TABLE IF NOT EXISTS betting_odds (
+    odds_id SERIAL PRIMARY KEY,
+    race_date DATE NOT NULL,
+    meet_code TEXT NOT NULL,
+    race_no INTEGER NOT NULL,
+    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
+    
+    -- 배당률 정보
+    win_odds NUMERIC(6,1), -- rcP1Odd (단승식 배당률)
+    place_odds NUMERIC(6,1), -- rcP2Odd (연승식 배당률)
+    show_odds NUMERIC(6,1), -- rcP3Odd (복승식 배당률)
+    quinella_odds NUMERIC(8,1), -- rcP4Odd (쌍승식 배당률)
+    exacta_odds NUMERIC(8,1), -- rcP5Odd (복연승식 배당률)
+    trifecta_odds NUMERIC(10,1), -- rcP6Odd (삼복승식 배당률)
+    superfecta_odds NUMERIC(10,1), -- rcP8Odd (삼쌍승식 배당률)
+    
+    -- 배당금 정보 (원 단위)
+    win_payout BIGINT, -- rcP1Sale (단승식 배당금)
+    place_payout BIGINT, -- rcP2Sale (연승식 배당금)
+    show_payout BIGINT, -- rcP3Sale (복승식 배당금)
+    quinella_payout BIGINT, -- rcP4Sale (쌍승식 배당금)
+    exacta_payout BIGINT, -- rcP5Sale (복연승식 배당금)
+    trifecta_payout BIGINT, -- rcP6Sale (삼복승식 배당금)
+    superfecta_payout BIGINT, -- rcP8Sale (삼쌍승식 배당금)
+    
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    FOREIGN KEY (race_date, meet_code, race_no) REFERENCES races(race_date, meet_code, race_no),
+    FOREIGN KEY (race_date, meet_code, race_no, horse_id) REFERENCES race_entries(race_date, meet_code, race_no, horse_id),
+    UNIQUE(race_date, meet_code, race_no, horse_id)
+);
+
+-- =============================================
+-- 인덱스 생성
+-- =============================================
+
+-- 경주 테이블 인덱스
+CREATE INDEX IF NOT EXISTS idx_races_date ON races(race_date DESC);
+CREATE INDEX IF NOT EXISTS idx_races_meet_date ON races(meet_code, race_date DESC);
+CREATE INDEX IF NOT EXISTS idx_races_distance ON races(race_distance);
+CREATE INDEX IF NOT EXISTS idx_races_grade ON races(race_grade);
+CREATE INDEX IF NOT EXISTS idx_races_conditions ON races(race_distance, track_condition, weather);
+
+-- 경주 참가 기록 인덱스
+CREATE INDEX IF NOT EXISTS idx_race_entries_horse ON race_entries(horse_id);
+CREATE INDEX IF NOT EXISTS idx_race_entries_jockey ON race_entries(jk_no);
+CREATE INDEX IF NOT EXISTS idx_race_entries_trainer ON race_entries(trainer_id);
+CREATE INDEX IF NOT EXISTS idx_race_entries_date ON race_entries(race_date DESC);
+CREATE INDEX IF NOT EXISTS idx_race_entries_rank ON race_entries(final_rank);
+CREATE INDEX IF NOT EXISTS idx_race_entries_horse_performance ON race_entries(horse_id, race_date DESC, final_rank);
+CREATE INDEX IF NOT EXISTS idx_race_entries_jockey_performance ON race_entries(jk_no, race_date DESC, final_rank);
+
+-- 배당률 테이블 인덱스
+CREATE INDEX IF NOT EXISTS idx_betting_odds_horse ON betting_odds(horse_id);
+CREATE INDEX IF NOT EXISTS idx_betting_odds_race ON betting_odds(race_date, meet_code, race_no);
+
+-- =============================================
+-- 업데이트 트리거 함수 (만약 없다면)
+-- =============================================
+
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- 트리거 생성
+CREATE TRIGGER update_racetracks_updated_at BEFORE UPDATE ON racetracks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_horses_updated_at BEFORE UPDATE ON horses FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_jockeys_updated_at BEFORE UPDATE ON jockeys FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_trainers_updated_at BEFORE UPDATE ON trainers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_owners_updated_at BEFORE UPDATE ON owners FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_races_updated_at BEFORE UPDATE ON races FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_race_entries_updated_at BEFORE UPDATE ON race_entries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_betting_odds_updated_at BEFORE UPDATE ON betting_odds FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- =============================================
+-- 유용한 뷰 생성
+-- =============================================
+
+-- 완전한 경주 결과 뷰
+CREATE OR REPLACE VIEW race_results_complete AS
+SELECT 
+    re.entry_id,
+    re.race_date,
+    rt.meet_name,
+    re.race_no,
+    h.name as horse_name,
+    re.horse_id,
+    j.name as jockey_name,
+    t.trainer_name,
+    o.owner_name,
+    r.race_distance,
+    r.race_grade,
+    r.race_age,
+    r.race_sex,
+    r.race_type,
+    r.track_condition,
+    r.weather,
+    re.entry_number,
+    re.horse_weight,
+    re.final_rank,
+    re.finish_time,
+    re.diff_total,
+    re.prize_money,
+    bo.win_odds,
+    bo.place_odds,
+    r.total_horses,
+    r.planned_horses
+FROM race_entries re
+JOIN races r ON (re.race_date = r.race_date AND re.meet_code = r.meet_code AND re.race_no = r.race_no)
+JOIN racetracks rt ON r.meet_code = rt.meet_code
+JOIN horses h ON re.horse_id = h.horse_id
+LEFT JOIN jockeys j ON re.jk_no = j.jk_no
+LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
+LEFT JOIN owners o ON re.owner_id = o.owner_id
+LEFT JOIN betting_odds bo ON (re.race_date = bo.race_date AND re.meet_code = bo.meet_code 
+                             AND re.race_no = bo.race_no AND re.horse_id = bo.horse_id);
+
+-- 말 성과 통계 뷰
+CREATE OR REPLACE VIEW horse_performance_stats AS
+SELECT 
+    h.horse_id,
+    h.name,
+    COUNT(*) as total_races,
+    COUNT(CASE WHEN re.final_rank = 1 THEN 1 END) as wins,
+    COUNT(CASE WHEN re.final_rank <= 3 THEN 1 END) as top3_finishes,
+    ROUND(AVG(re.final_rank::numeric), 2) as avg_rank,
+    SUM(re.prize_money) as total_prize_money,
+    MAX(re.race_date) as last_race_date
+FROM horses h
+JOIN race_entries re ON h.horse_id = re.horse_id
+GROUP BY h.horse_id, h.name
+HAVING COUNT(*) >= 1
+ORDER BY wins DESC, total_races DESC;

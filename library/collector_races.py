@@ -1,0 +1,648 @@
+# -*- coding: utf-8 -*-
+import requests
+import pandas as pd
+from datetime import datetime, date
+from config import API_KEY, SUPABASE_URL, SUPABASE_KEY
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
+from supabase import create_client, Client
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# HTTP 요청 로그 숨기기
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("supabase").setLevel(logging.WARNING)
+logging.getLogger("postgrest").setLevel(logging.WARNING)
+
+# Supabase 클라이언트 초기화
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def parse_date(date_str):
+    """날짜 문자열을 변환 (YYYYMMDD -> YYYY-MM-DD 문자열)"""
+    try:
+        date_obj = datetime.strptime(str(date_str), "%Y%m%d").date()
+        return date_obj.isoformat()
+    except:
+        return None
+
+def safe_int(value, default=0):
+    """안전한 정수 변환"""
+    try:
+        return int(value) if value and str(value).strip() != '' else default
+    except:
+        return default
+
+def safe_float(value, default=0.0):
+    """안전한 실수 변환"""
+    try:
+        return float(value) if value and str(value).strip() != '' else default
+    except:
+        return default
+
+def safe_str(value, default=''):
+    """안전한 문자열 변환"""
+    try:
+        return str(value).strip() if value else default
+    except:
+        return default
+
+def fetch_race_data(page=1, per_page=1000):
+    """경주 결과 API에서 데이터 가져오는 함수"""
+    params = {
+        "serviceKey": API_KEY,
+        "pageNo": page,
+        "numOfRows": per_page,
+        "_type": 'json'
+    }
+
+    try:
+        endpoint = "http://apis.data.go.kr/B551015/API186_1/SeoulRace_1"
+        response = requests.get(endpoint, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data, page
+        elif response.status_code == 429:
+            logger.warning(f"API 호출 제한 - 페이지 {page}, 5초 대기 후 재시도")
+            time.sleep(5)
+            return fetch_race_data(page, per_page)
+        else:
+            logger.error(f"API 호출 실패 - 페이지 {page}: {response.status_code}")
+            return None, page
+
+    except Exception as e:
+        logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
+        return None, page
+
+def get_existing_master_data():
+    """기존 마스터 데이터 캐시 생성"""
+    try:
+        # 기존 데이터들을 메모리에 캐시
+        horses = supabase.table('horses').select('horse_id').execute()
+        jockeys = supabase.table('jockeys').select('jk_no').execute()
+        trainers = supabase.table('trainers').select('trainer_id').execute()
+        owners = supabase.table('owners').select('owner_id').execute()
+        
+        existing_data = {
+            'horses': set(item['horse_id'] for item in horses.data) if horses.data else set(),
+            'jockeys': set(item['jk_no'] for item in jockeys.data) if jockeys.data else set(),
+            'trainers': set(item['trainer_id'] for item in trainers.data) if trainers.data else set(),
+            'owners': set(item['owner_id'] for item in owners.data) if owners.data else set()
+        }
+        
+        logger.info(f"기존 마스터 데이터 캐시: 말 {len(existing_data['horses'])}마리, "
+                   f"기수 {len(existing_data['jockeys'])}명, "
+                   f"조교사 {len(existing_data['trainers'])}명, "
+                   f"마주 {len(existing_data['owners'])}명")
+        
+        return existing_data
+        
+    except Exception as e:
+        logger.error(f"마스터 데이터 캐시 생성 실패: {str(e)}")
+        return {'horses': set(), 'jockeys': set(), 'trainers': set(), 'owners': set()}
+
+def save_missing_master_data(missing_data):
+    """누락된 마스터 데이터 저장"""
+    try:
+        saved_counts = {}
+        
+        # 말 정보 저장
+        if missing_data['horses']:
+            logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
+            for batch_start in range(0, len(missing_data['horses']), 100):
+                batch = missing_data['horses'][batch_start:batch_start + 100]
+                try:
+                    result = supabase.table('horses').insert(batch).execute()
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"말 정보 배치 저장 실패: {str(e)}")
+                    # 개별 저장 시도
+                    for horse in batch:
+                        try:
+                            supabase.table('horses').insert(horse).execute()
+                            time.sleep(0.02)
+                        except Exception as individual_error:
+                            logger.debug(f"말 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            saved_counts['horses'] = len(missing_data['horses'])
+        else:
+            saved_counts['horses'] = 0
+            
+        # 기수 정보 저장
+        if missing_data['jockeys']:
+            logger.info(f"새로운 기수 {len(missing_data['jockeys'])}명 추가")
+            for batch_start in range(0, len(missing_data['jockeys']), 100):
+                batch = missing_data['jockeys'][batch_start:batch_start + 100]
+                try:
+                    result = supabase.table('jockeys').insert(batch).execute()
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"기수 정보 배치 저장 실패: {str(e)}")
+                    # 개별 저장 시도
+                    for jockey in batch:
+                        try:
+                            supabase.table('jockeys').insert(jockey).execute()
+                            time.sleep(0.02)
+                        except Exception as individual_error:
+                            logger.debug(f"기수 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            saved_counts['jockeys'] = len(missing_data['jockeys'])
+        else:
+            saved_counts['jockeys'] = 0
+            
+        # 조교사 정보 저장
+        if missing_data['trainers']:
+            logger.info(f"새로운 조교사 {len(missing_data['trainers'])}명 추가")
+            for batch_start in range(0, len(missing_data['trainers']), 100):
+                batch = missing_data['trainers'][batch_start:batch_start + 100]
+                try:
+                    result = supabase.table('trainers').insert(batch).execute()
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"조교사 정보 배치 저장 실패: {str(e)}")
+                    # 개별 저장 시도
+                    for trainer in batch:
+                        try:
+                            supabase.table('trainers').insert(trainer).execute()
+                            time.sleep(0.02)
+                        except Exception as individual_error:
+                            logger.debug(f"조교사 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            saved_counts['trainers'] = len(missing_data['trainers'])
+        else:
+            saved_counts['trainers'] = 0
+            
+        # 마주 정보 저장
+        if missing_data['owners']:
+            logger.info(f"새로운 마주 {len(missing_data['owners'])}명 추가")
+            for batch_start in range(0, len(missing_data['owners']), 100):
+                batch = missing_data['owners'][batch_start:batch_start + 100]
+                try:
+                    result = supabase.table('owners').insert(batch).execute()
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"마주 정보 배치 저장 실패: {str(e)}")
+                    # 개별 저장 시도
+                    for owner in batch:
+                        try:
+                            supabase.table('owners').insert(owner).execute()
+                            time.sleep(0.02)
+                        except Exception as individual_error:
+                            logger.debug(f"마주 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            saved_counts['owners'] = len(missing_data['owners'])
+        else:
+            saved_counts['owners'] = 0
+            
+        return saved_counts
+        
+    except Exception as e:
+        logger.error(f"마스터 데이터 저장 실패: {str(e)}")
+        return {'horses': 0, 'jockeys': 0, 'trainers': 0, 'owners': 0}
+
+def parse_and_normalize_race_data(api_response):
+    """API 응답을 파싱하여 정규화된 테이블 구조로 변환"""
+    racetracks = []
+    races = []
+    race_entries = []
+    betting_odds = []
+    master_data = {
+        'horses': [],
+        'jockeys': [],
+        'trainers': [],
+        'owners': []
+    }
+    
+    try:
+        if 'response' in api_response and 'body' in api_response['response']:
+            body = api_response['response']['body']
+            items = body.get('items', []) if body else []
+            
+            if items:
+                items = items.get('item', [])
+                
+                # 중복 제거를 위한 집합
+                processed_racetracks = set()
+                processed_races = set()
+                processed_horses = set()
+                processed_jockeys = set()
+                processed_trainers = set()
+                processed_owners = set()
+                
+                for item in items:
+                    race_date = parse_date(item.get('rcDate'))
+                    if not race_date:
+                        continue
+                    
+                    meet_code = safe_str(item.get('meet'))
+                    race_no = safe_int(item.get('rcNo'))
+                    horse_id = safe_str(item.get('hrno'))
+                    
+                    if not all([race_date, meet_code, race_no, horse_id]):
+                        continue
+                    
+                    # 1. 경마장 정보 (meet_code 기반)
+                    if meet_code and meet_code not in processed_racetracks:
+                        racetracks.append({
+                            'meet_code': meet_code,
+                            'meet_name': meet_code  # API에서 경마장 이름이 별도로 없으면 코드 사용
+                        })
+                        processed_racetracks.add(meet_code)
+                    
+                    # 2. 경주 기본 정보
+                    race_key = (race_date, meet_code, race_no)
+                    if race_key not in processed_races:
+                        races.append({
+                            'race_date': race_date,
+                            'meet_code': meet_code,
+                            'race_no': race_no,
+                            'race_distance': safe_int(item.get('rcDist')),
+                            'race_grade': safe_str(item.get('rcGrade')),
+                            'race_age': safe_str(item.get('rcAge')),
+                            'race_sex': safe_str(item.get('rcSex')),
+                            'race_type': safe_str(item.get('rcCode')),
+                            'race_category': safe_str(item.get('rcRank')),
+                            'race_kind': safe_str(item.get('rankKind')),
+                            'race_flag': safe_str(item.get('rcFrflag')),
+                            'night_race': safe_str(item.get('rcNrace')),
+                            'track_condition': safe_str(item.get('track')),
+                            'weather': safe_str(item.get('weath')),
+                            'total_horses': safe_int(item.get('rcVtdusu')),
+                            'planned_horses': safe_int(item.get('rcPlansu')),
+                            'weight_type': safe_int(item.get('rcBudam')),
+                            'race_status': safe_str(item.get('noracefl')),
+                            'is_divided': safe_int(item.get('divide')),
+                            'race_days': safe_int(item.get('rundayth')),
+                            'special_code_a': safe_str(item.get('rcSpcba')),
+                            'special_code_b': safe_str(item.get('rcSpcbu')),
+                            'estimated_odds': safe_float(item.get('rc10dusu'))
+                        })
+                        processed_races.add(race_key)
+                    
+                    # 마스터 데이터 ID들과 이름들
+                    jk_no = safe_str(item.get('jkNo'))
+                    jockey_name = safe_str(item.get('jkName'))
+                    trainer_id = safe_str(item.get('prtr'))
+                    trainer_name = safe_str(item.get('prtrName'))
+                    owner_id = safe_str(item.get('prow'))
+                    owner_name = safe_str(item.get('prowName'))
+                    horse_name = safe_str(item.get('hrName'))
+                    
+                    # 마스터 데이터 수집 (API에서 가져온 실제 정보 사용)
+                    if horse_id and horse_id not in processed_horses:
+                        master_data['horses'].append({
+                            'horse_id': horse_id,
+                            'name': horse_name or f'Horse_{horse_id}',  # name 컬럼으로 변경
+                        })
+                        processed_horses.add(horse_id)
+                    
+                    if jk_no and jk_no not in processed_jockeys:
+                        master_data['jockeys'].append({
+                            'jk_no': jk_no,  # jk_no 컬럼 사용
+                            'name': jockey_name or f'Jockey_{jk_no}'  # name 컬럼으로 변경
+                        })
+                        processed_jockeys.add(jk_no)
+                    
+                    if trainer_id and trainer_id not in processed_trainers:
+                        master_data['trainers'].append({
+                            'trainer_id': trainer_id,
+                            'trainer_name': trainer_name or f'Trainer_{trainer_id}'  # trainer_name 컬럼 유지
+                        })
+                        processed_trainers.add(trainer_id)
+                    
+                    if owner_id and owner_id not in processed_owners:
+                        master_data['owners'].append({
+                            'owner_id': owner_id,
+                            'owner_name': owner_name or f'Owner_{owner_id}'  # owner_name 컬럼 유지
+                        })
+                        processed_owners.add(owner_id)
+                    
+                    # 3. 경주 참가 기록
+                    race_entries.append({
+                        'race_date': race_date,
+                        'meet_code': meet_code,
+                        'race_no': race_no,
+                        'horse_id': horse_id,
+                        'jk_no': jk_no if jk_no else None,  # jk_no 컬럼으로 변경
+                        'trainer_id': trainer_id if trainer_id else None,
+                        'owner_id': owner_id if owner_id else None,
+                        'entry_number': safe_int(item.get('rcChul')),
+                        'gate_number': None,  # API에 없음
+                        'horse_weight': safe_int(item.get('wgHr')),
+                        'final_rank': safe_int(item.get('rcOrd')),
+                        'finish_time': safe_float(item.get('rcTime')),
+                        'diff_total': safe_float(item.get('diffTot')),
+                        'diff_2nd': safe_float(item.get('rcDiff2')),
+                        'diff_3rd': safe_float(item.get('rcDiff3')),
+                        'diff_4th': safe_float(item.get('rcDiff4')),
+                        'diff_5th': safe_float(item.get('rcDiff5')),
+                        'prize_money': safe_int(item.get('chaksun'))
+                    })
+                    
+                    # 4. 배당률 정보
+                    betting_odds.append({
+                        'race_date': race_date,
+                        'meet_code': meet_code,
+                        'race_no': race_no,
+                        'horse_id': horse_id,
+                        'win_odds': safe_float(item.get('rcP1Odd')),
+                        'place_odds': safe_float(item.get('rcP2Odd')),
+                        'show_odds': safe_float(item.get('rcP3Odd')),
+                        'quinella_odds': safe_float(item.get('rcP4Odd')),
+                        'exacta_odds': safe_float(item.get('rcP5Odd')),
+                        'trifecta_odds': safe_float(item.get('rcP6Odd')),
+                        'superfecta_odds': safe_float(item.get('rcP8Odd')),
+                        'win_payout': safe_int(item.get('rcP1Sale')),
+                        'place_payout': safe_int(item.get('rcP2Sale')),
+                        'show_payout': safe_int(item.get('rcP3Sale')),
+                        'quinella_payout': safe_int(item.get('rcP4Sale')),
+                        'exacta_payout': safe_int(item.get('rcP5Sale')),
+                        'trifecta_payout': safe_int(item.get('rcP6Sale')),
+                        'superfecta_payout': safe_int(item.get('rcP8Sale'))
+                    })
+                        
+    except Exception as e:
+        logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
+        
+    return {
+        'racetracks': racetracks,
+        'races': races,
+        'race_entries': race_entries,
+        'betting_odds': betting_odds,
+        'master_data': master_data  # 새로 추가
+    }
+
+def filter_master_data_duplicates(parsed_master_data, existing_master_data):
+    """파싱된 마스터 데이터에서 기존 데이터와 중복 제거"""
+    filtered_data = {
+        'horses': [],
+        'jockeys': [],
+        'trainers': [],
+        'owners': []
+    }
+    
+    # 말 데이터 필터링
+    for horse in parsed_master_data.get('horses', []):
+        if horse['horse_id'] not in existing_master_data['horses']:
+            filtered_data['horses'].append(horse)
+            existing_master_data['horses'].add(horse['horse_id'])
+    
+    # 기수 데이터 필터링
+    for jockey in parsed_master_data.get('jockeys', []):
+        if jockey['jk_no'] not in existing_master_data['jockeys']:  # jk_no로 변경
+            filtered_data['jockeys'].append(jockey)
+            existing_master_data['jockeys'].add(jockey['jk_no'])
+    
+    # 조교사 데이터 필터링
+    for trainer in parsed_master_data.get('trainers', []):
+        if trainer['trainer_id'] not in existing_master_data['trainers']:
+            filtered_data['trainers'].append(trainer)
+            existing_master_data['trainers'].add(trainer['trainer_id'])
+    
+    # 마주 데이터 필터링
+    for owner in parsed_master_data.get('owners', []):
+        if owner['owner_id'] not in existing_master_data['owners']:
+            filtered_data['owners'].append(owner)
+            existing_master_data['owners'].add(owner['owner_id'])
+    
+    return filtered_data
+
+def save_normalized_data(data_dict, existing_master_data, batch_size=200):
+    """정규화된 데이터를 각 테이블에 저장"""
+    saved_counts = {}
+    
+    # 1. API에서 파싱된 마스터 데이터 저장 (기존 데이터와 중복 제거)
+    parsed_master_data = data_dict.get('master_data', {})
+    filtered_master_data = filter_master_data_duplicates(parsed_master_data, existing_master_data)
+    master_saved_counts = save_missing_master_data(filtered_master_data)
+    
+    logger.info(f"마스터 데이터 추가 완료: 말 {master_saved_counts['horses']}마리, "
+               f"기수 {master_saved_counts['jockeys']}명, "
+               f"조교사 {master_saved_counts['trainers']}명, "
+               f"마주 {master_saved_counts['owners']}명")
+    
+    # 2. 경주 관련 데이터 저장
+    table_order = [
+        ('racetracks', 'racetracks'),
+        ('races', 'races'),
+        ('race_entries', 'race_entries'),
+        ('betting_odds', 'betting_odds')
+    ]
+    
+    for table_name, data_key in table_order:
+        data = data_dict.get(data_key, [])
+        if not data:
+            logger.info(f"{table_name}: 저장할 데이터 없음")
+            saved_counts[table_name] = 0
+            continue
+            
+        logger.info(f"{table_name} 저장 시작: {len(data)}개")
+        saved_count = save_table_data(table_name, data, batch_size)
+        saved_counts[table_name] = saved_count
+        
+        time.sleep(0.2)  # API 제한 방지
+    
+    # 마스터 데이터 카운트도 포함
+    saved_counts.update(master_saved_counts)
+    return saved_counts
+
+def save_table_data(table_name, data, batch_size=200):
+    """특정 테이블에 데이터 저장"""
+    try:
+        total_saved = 0
+        
+        for i in range(0, len(data), batch_size):
+            batch = data[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            
+            try:
+                # 각 배치에 타임스탬프 추가
+                current_time = datetime.now().isoformat()
+                for record in batch:
+                    if 'updated_at' not in record:
+                        record['updated_at'] = current_time
+                
+                # Supabase에 데이터 삽입 (upsert 사용)
+                result = supabase.table(table_name).upsert(batch).execute()
+                
+                batch_count = len(batch)
+                total_saved += batch_count
+                
+                logger.info(f"{table_name} 배치 {batch_num}: {batch_count}개 저장 완료 (누적: {total_saved}개)")
+                
+                time.sleep(0.1)
+                
+            except Exception as batch_error:
+                error_msg = str(batch_error)
+                if "duplicate key" in error_msg.lower():
+                    logger.info(f"{table_name} 배치 {batch_num}: 중복 데이터 스킵")
+                else:
+                    logger.error(f"{table_name} 배치 {batch_num} 저장 실패: {error_msg}")
+                    # 개별 저장 시도
+                    individual_saved = save_individual_records(table_name, batch)
+                    total_saved += individual_saved
+        
+        logger.info(f"{table_name} 저장 완료: 총 {total_saved}개")
+        return total_saved
+        
+    except Exception as e:
+        logger.error(f"{table_name} 저장 중 오류: {str(e)}")
+        return 0
+
+def save_individual_records(table_name, records):
+    """개별 레코드 저장 (배치 실패 시 백업)"""
+    saved_count = 0
+    
+    for record in records:
+        try:
+            record['updated_at'] = datetime.now().isoformat()
+            supabase.table(table_name).upsert(record).execute()
+            saved_count += 1
+            
+            time.sleep(0.02)
+        except Exception as e:
+            if "duplicate key" not in str(e).lower() and "foreign key" not in str(e).lower():
+                logger.error(f"{table_name} 개별 저장 실패: {str(e)}")
+            else:
+                logger.debug(f"{table_name} 개별 저장 스킵 (중복 또는 외래키): {str(e)}")
+    
+    return saved_count
+
+def fetch_pages_sequential(start_page=1, max_pages=20):
+    """순차적으로 경주 결과 데이터 수집"""
+    all_race_data = []
+    empty_pages = 0
+    
+    for page in range(start_page, start_page + max_pages):
+        try:
+            api_data, _ = fetch_race_data(page=page)
+            
+            if api_data:
+                parsed_data = parse_and_normalize_race_data(api_data)
+                race_entries = parsed_data.get('race_entries', [])
+                
+                if race_entries:
+                    all_race_data.append(parsed_data)
+                    logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
+                    empty_pages = 0
+                else:
+                    empty_pages += 1
+                    logger.info(f"페이지 {page}: 데이터 없음")
+            else:
+                empty_pages += 1
+                
+            if empty_pages >= 5:
+                logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
+                break
+                
+            time.sleep(0.2)
+            
+        except Exception as e:
+            logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
+            continue
+    
+    # 모든 데이터 통합
+    if all_race_data:
+        combined_data = {
+            'racetracks': [],
+            'races': [],
+            'race_entries': [],
+            'betting_odds': [],
+            'master_data': {
+                'horses': [],
+                'jockeys': [],
+                'trainers': [],
+                'owners': []
+            }
+        }
+        
+        for data in all_race_data:
+            for key in ['racetracks', 'races', 'race_entries', 'betting_odds']:
+                combined_data[key].extend(data.get(key, []))
+            
+            # 마스터 데이터도 통합
+            master_data = data.get('master_data', {})
+            for master_key in ['horses', 'jockeys', 'trainers', 'owners']:
+                combined_data['master_data'][master_key].extend(master_data.get(master_key, []))
+        
+        return combined_data
+    
+    return {}
+
+def collecting_race_results_normalized(start_page=1, max_pages=20):
+    """정규화된 구조로 경주 결과 수집 메인 함수"""
+    logger.info("정규화된 경주 결과 수집을 시작합니다...")
+    logger.info(f"시작 페이지: {start_page}, 최대 페이지: {max_pages}")
+    
+    # 기존 마스터 데이터 캐시 생성
+    existing_master_data = get_existing_master_data()
+    
+    start_time = time.time()
+    
+    # 데이터 수집
+    race_data = fetch_pages_sequential(start_page=start_page, max_pages=max_pages)
+    
+    if not race_data or not race_data.get('race_entries'):
+        logger.warning("수집된 경주 결과가 없습니다.")
+        return
+    
+    total_entries = len(race_data.get('race_entries', []))
+    total_races = len(race_data.get('races', []))
+    logger.info(f"총 {total_races}개 경주, {total_entries}개 경주 기록을 수집했습니다.")
+    
+    # 데이터 저장 (마스터 데이터 자동 추가 포함)
+    saved_counts = save_normalized_data(race_data, existing_master_data, batch_size=150)
+    
+    if saved_counts:
+        end_time = time.time()
+        logger.info(f"경주 결과 수집 완료! 소요시간: {end_time - start_time:.2f}초")
+        
+        # 저장 결과 요약
+        logger.info("=== 저장 결과 요약 ===")
+        for table_name, count in saved_counts.items():
+            logger.info(f"{table_name}: {count}개")
+    else:
+        logger.error("경주 결과 저장 실패")
+
+def check_data_quality():
+    """데이터 품질 확인"""
+    try:
+        # 경주 결과 통계
+        race_entries = supabase.table('race_entries').select('*', count='exact').execute()
+        races = supabase.table('races').select('*', count='exact').execute()
+        
+        entries_count = race_entries.count if hasattr(race_entries, 'count') else len(race_entries.data)
+        races_count = races.count if hasattr(races, 'count') else len(races.data)
+        
+        logger.info(f"현재 DB 상태: {races_count}개 경주, {entries_count}개 경주 기록")
+        
+        # 마스터 데이터 확인
+        horses_count = supabase.table('horses').select('*', count='exact').execute().count or 0
+        jockeys_count = supabase.table('jockeys').select('*', count='exact').execute().count or 0
+        trainers_count = supabase.table('trainers').select('*', count='exact').execute().count or 0
+        owners_count = supabase.table('owners').select('*', count='exact').execute().count or 0
+        
+        logger.info(f"마스터 데이터: 말 {horses_count}마리, 기수 {jockeys_count}명, "
+                   f"조교사 {trainers_count}명, 마주 {owners_count}명")
+        
+        # 최근 데이터 확인
+        recent_races = supabase.table('race_entries').select(
+            'race_date, meet_code, race_no, horse_id, final_rank'
+        ).order('race_date', desc=True).limit(5).execute()
+        
+        if recent_races.data:
+            logger.info("최근 경주 결과:")
+            for entry in recent_races.data:
+                logger.info(f"  - {entry['race_date']} {entry['meet_code']} {entry['race_no']}R: "
+                          f"말 {entry['horse_id']} ({entry['final_rank']}위)")
+        
+    except Exception as e:
+        logger.error(f"데이터 품질 확인 실패: {str(e)}")
+
+# 실행 예시
+if __name__ == "__main__":
+    # 경주 결과 수집
+    collecting_race_results_normalized(start_page=1, max_pages=10)
+    
+    # 데이터 품질 확인
+    check_data_quality()
