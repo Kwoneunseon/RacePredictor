@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 import requests
-import pandas as pd
-from datetime import datetime, date
-from config import API_KEY, SUPABASE_URL, SUPABASE_KEY
+from datetime import datetime
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from supabase import create_client, Client
+
+from Utils import parse_date, safe_int, safe_float, safe_str
+from .config import API_KEY, SUPABASE_URL, SUPABASE_KEY
+from .collector_horse import fetch_pages_sequential as horse_fetch_page, save_to_supabase_batch as save_horse_data
+from .collector_jockeys import fetch_pages_sequential as jockey_fetch_page, save_to_supabase_batch as save_jockey_data   
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,34 +23,6 @@ logging.getLogger("postgrest").setLevel(logging.WARNING)
 # Supabase 클라이언트 초기화
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def parse_date(date_str):
-    """날짜 문자열을 변환 (YYYYMMDD -> YYYY-MM-DD 문자열)"""
-    try:
-        date_obj = datetime.strptime(str(date_str), "%Y%m%d").date()
-        return date_obj.isoformat()
-    except:
-        return None
-
-def safe_int(value, default=0):
-    """안전한 정수 변환"""
-    try:
-        return int(value) if value and str(value).strip() != '' else default
-    except:
-        return default
-
-def safe_float(value, default=0.0):
-    """안전한 실수 변환"""
-    try:
-        return float(value) if value and str(value).strip() != '' else default
-    except:
-        return default
-
-def safe_str(value, default=''):
-    """안전한 문자열 변환"""
-    try:
-        return str(value).strip() if value else default
-    except:
-        return default
 
 def fetch_race_data(page=1, per_page=1000):
     """경주 결과 API에서 데이터 가져오는 함수"""
@@ -79,7 +53,7 @@ def fetch_race_data(page=1, per_page=1000):
         return None, page
 
 def get_existing_master_data():
-    """기존 마스터 데이터 캐시 생성"""
+    """기존 마스터 데이터 개수 확인"""
     try:
         # 기존 데이터들을 메모리에 캐시
         horses = supabase.table('horses').select('horse_id').execute()
@@ -113,20 +87,10 @@ def save_missing_master_data(missing_data):
         # 말 정보 저장
         if missing_data['horses']:
             logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
-            for batch_start in range(0, len(missing_data['horses']), 100):
-                batch = missing_data['horses'][batch_start:batch_start + 100]
-                try:
-                    result = supabase.table('horses').insert(batch).execute()
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.error(f"말 정보 배치 저장 실패: {str(e)}")
-                    # 개별 저장 시도
-                    for horse in batch:
-                        try:
-                            supabase.table('horses').insert(horse).execute()
-                            time.sleep(0.02)
-                        except Exception as individual_error:
-                            logger.debug(f"말 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            for batch_start in range(0, len(missing_data['horses'])):
+                horse_id = missing_data['horses'][batch_start]['horse_id']
+                horse_data = horse_fetch_page(start_page=1, max_pages=1, options={'hr_no': horse_id})
+                save_horse_data(horse_data)
             saved_counts['horses'] = len(missing_data['horses'])
         else:
             saved_counts['horses'] = 0
@@ -134,23 +98,11 @@ def save_missing_master_data(missing_data):
         # 기수 정보 저장
         if missing_data['jockeys']:
             logger.info(f"새로운 기수 {len(missing_data['jockeys'])}명 추가")
-            for batch_start in range(0, len(missing_data['jockeys']), 100):
-                batch = missing_data['jockeys'][batch_start:batch_start + 100]
-                try:
-                    result = supabase.table('jockeys').insert(batch).execute()
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.error(f"기수 정보 배치 저장 실패: {str(e)}")
-                    # 개별 저장 시도
-                    for jockey in batch:
-                        try:
-                            supabase.table('jockeys').insert(jockey).execute()
-                            time.sleep(0.02)
-                        except Exception as individual_error:
-                            logger.debug(f"기수 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+            for batch_start in range(0, len(missing_data['jockeys'])):
+                jockey_no = missing_data['jockeys'][batch_start]['jk_no']
+                jockey_data = jockey_fetch_page(start_page=1, max_pages=1,options={'jk_no': jockey_no})
+                save_jockey_data(jockey_data)
             saved_counts['jockeys'] = len(missing_data['jockeys'])
-        else:
-            saved_counts['jockeys'] = 0
             
         # 조교사 정보 저장
         if missing_data['trainers']:
@@ -327,7 +279,6 @@ def parse_and_normalize_race_data(api_response):
                         'trainer_id': trainer_id if trainer_id else None,
                         'owner_id': owner_id if owner_id else None,
                         'entry_number': safe_int(item.get('rcChul')),
-                        'gate_number': None,  # API에 없음
                         'horse_weight': safe_int(item.get('wgHr')),
                         'final_rank': safe_int(item.get('rcOrd')),
                         'finish_time': safe_float(item.get('rcTime')),
