@@ -86,28 +86,35 @@ def save_missing_master_data(missing_data):
         
         # 말 정보 저장
         if missing_data['horses']:
+            horse_datas=[]
             logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
             for batch_start in range(0, len(missing_data['horses'])):
                 horse_id = missing_data['horses'][batch_start]['horse_id']
                 horse_data = horse_fetch_page(start_page=1, max_pages=1, options={'hr_no': horse_id})
-                save_horse_data(horse_data)
+                if horse_data:
+                    horse_datas.append(horse_data)
+            save_horse_data(horse_datas)
             saved_counts['horses'] = len(missing_data['horses'])
         else:
             saved_counts['horses'] = 0
             
         # 기수 정보 저장
         if missing_data['jockeys']:
+            jockey_datas = []   
             logger.info(f"새로운 기수 {len(missing_data['jockeys'])}명 추가")
             for batch_start in range(0, len(missing_data['jockeys'])):
                 jockey_no = missing_data['jockeys'][batch_start]['jk_no']
                 jockey_data = jockey_fetch_page(start_page=1, max_pages=1,options={'jk_no': jockey_no})
-                save_jockey_data(jockey_data)
+                if jockey_data:
+                    jockey_datas.append(jockey_data)
+
+            save_jockey_data(jockey_datas)
             saved_counts['jockeys'] = len(missing_data['jockeys'])
             
         # 조교사 정보 저장
         if missing_data['trainers']:
             logger.info(f"새로운 조교사 {len(missing_data['trainers'])}명 추가")
-            for batch_start in range(0, len(missing_data['trainers']), 100):
+            for batch_start in range(0, len(missing_data['trainers'])):
                 batch = missing_data['trainers'][batch_start:batch_start + 100]
                 try:
                     result = supabase.table('trainers').insert(batch).execute()
@@ -154,7 +161,6 @@ def save_missing_master_data(missing_data):
 
 def parse_and_normalize_race_data(api_response):
     """API 응답을 파싱하여 정규화된 테이블 구조로 변환"""
-    racetracks = []
     races = []
     race_entries = []
     betting_odds = []
@@ -182,55 +188,11 @@ def parse_and_normalize_race_data(api_response):
                 processed_owners = set()
                 
                 for item in items:
-                    race_date = parse_date(item.get('rcDate'))
-                    if not race_date:
-                        continue
-                    
-                    meet_code = safe_str(item.get('meet'))
-                    race_no = safe_int(item.get('rcNo'))
-                    horse_id = safe_str(item.get('hrno'))
-                    
-                    if not all([race_date, meet_code, race_no, horse_id]):
-                        continue
-                    
-                    # 1. 경마장 정보 (meet_code 기반)
-                    if meet_code and meet_code not in processed_racetracks:
-                        racetracks.append({
-                            'meet_code': meet_code,
-                            'meet_name': meet_code  # API에서 경마장 이름이 별도로 없으면 코드 사용
-                        })
-                        processed_racetracks.add(meet_code)
-                    
-                    # 2. 경주 기본 정보
-                    race_key = (race_date, meet_code, race_no)
-                    if race_key not in processed_races:
-                        races.append({
-                            'race_date': race_date,
-                            'meet_code': meet_code,
-                            'race_no': race_no,
-                            'race_distance': safe_int(item.get('rcDist')),
-                            'race_grade': safe_str(item.get('rcGrade')),
-                            'race_age': safe_str(item.get('rcAge')),
-                            'race_sex': safe_str(item.get('rcSex')),
-                            'race_type': safe_str(item.get('rcCode')),
-                            'race_category': safe_str(item.get('rcRank')),
-                            'race_kind': safe_str(item.get('rankKind')),
-                            'race_flag': safe_str(item.get('rcFrflag')),
-                            'night_race': safe_str(item.get('rcNrace')),
-                            'track_condition': safe_str(item.get('track')),
-                            'weather': safe_str(item.get('weath')),
-                            'total_horses': safe_int(item.get('rcVtdusu')),
-                            'planned_horses': safe_int(item.get('rcPlansu')),
-                            'weight_type': safe_int(item.get('rcBudam')),
-                            'race_status': safe_str(item.get('noracefl')),
-                            'is_divided': safe_int(item.get('divide')),
-                            'race_days': safe_int(item.get('rundayth')),
-                            'special_code_a': safe_str(item.get('rcSpcba')),
-                            'special_code_b': safe_str(item.get('rcSpcbu')),
-                            'estimated_odds': safe_float(item.get('rc10dusu'))
-                        })
-                        processed_races.add(race_key)
-                    
+                    race_date = parse_date(item.get('rcDate')) #경마일자
+                    meet_code = safe_str(item.get('meet'))  #경마장 명  
+                    race_no = safe_int(item.get('rcNo'))    #경주 번호
+                    horse_id = safe_str(item.get('hrno'))   #마번
+
                     # 마스터 데이터 ID들과 이름들
                     jk_no = safe_str(item.get('jkNo'))
                     jockey_name = safe_str(item.get('jkName'))
@@ -240,22 +202,56 @@ def parse_and_normalize_race_data(api_response):
                     owner_name = safe_str(item.get('prowName'))
                     horse_name = safe_str(item.get('hrName'))
                     
+                    if not all([race_date, meet_code, race_no, horse_id, jk_no, trainer_id, owner_id]):
+                        continue                    
+                    
+                    # 2. 경주 기본 정보
+                    race_key = (race_date, meet_code, race_no)
+                    if race_key not in processed_races:
+                        races.append({
+                            'race_date': race_date,
+                            'meet_code': meet_code,
+                            'race_no': race_no,
+                            'race_distance': safe_int(item.get('rcDist')),  #경주거리
+                            'race_grade': safe_str(item.get('rcGrade')),    #경주등급
+                            'race_age': safe_str(item.get('rcAge')),        #연령조건
+                            'race_sex': safe_str(item.get('rcSex')),        #성별조건
+                            'race_type': safe_str(item.get('rcCode')),      #대상경주명(일반, 특별, 오픈 등)
+                            #'race_category': safe_str(item.get('rcRank')),
+                            'race_kind': safe_str(item.get('rankKind')),    #경주종류
+                            'race_flag': safe_str(item.get('rcFrflag')),    #경주구분(국산, 혼합, 외산 등)
+                            'night_race': safe_str(item.get('rcNrace')),    #야간경주 여부
+                            'track_condition': safe_str(item.get('track')), #경주로상태
+                            'weather': safe_str(item.get('weath')),         #날씨
+                            'total_horses': safe_int(item.get('rcVtdusu')), #총 출전마 수
+                            'planned_horses': safe_int(item.get('rcPlansu')),#계획 출전마 수
+                            'weight_type': safe_int(item.get('rcBudam')),   #부담구분(1:마령, 2:별정, 3:핸디캡)
+                            'race_status': safe_str(item.get('noracefl')),  #경주상태(정상/취소 등)
+                            'is_divided': safe_int(item.get('divide')),     #분할경주 여부
+                            'race_days': safe_int(item.get('rundayth')),    #경주일수 (말 출전한 총 일수)
+                            #'special_code_a': safe_str(item.get('rcSpcba')),
+                            #'special_code_b': safe_str(item.get('rcSpcbu')),
+                            'estimated_odds': safe_float(item.get('rc10dusu')) # 예상배당률
+                        })
+                        processed_races.add(race_key)                   
+
+                    
                     # 마스터 데이터 수집 (API에서 가져온 실제 정보 사용)
-                    if horse_id and horse_id not in processed_horses:
+                    if horse_id not in processed_horses:
                         master_data['horses'].append({
                             'horse_id': horse_id,
                             'name': horse_name or f'Horse_{horse_id}',  # name 컬럼으로 변경
                         })
                         processed_horses.add(horse_id)
                     
-                    if jk_no and jk_no not in processed_jockeys:
+                    if jk_no not in processed_jockeys:
                         master_data['jockeys'].append({
                             'jk_no': jk_no,  # jk_no 컬럼 사용
                             'name': jockey_name or f'Jockey_{jk_no}'  # name 컬럼으로 변경
                         })
                         processed_jockeys.add(jk_no)
                     
-                    if trainer_id and trainer_id not in processed_trainers:
+                    if trainer_id not in processed_trainers:
                         master_data['trainers'].append({
                             'trainer_id': trainer_id,
                             'trainer_name': trainer_name or f'Trainer_{trainer_id}'  # trainer_name 컬럼 유지
@@ -275,19 +271,19 @@ def parse_and_normalize_race_data(api_response):
                         'meet_code': meet_code,
                         'race_no': race_no,
                         'horse_id': horse_id,
-                        'jk_no': jk_no if jk_no else None,  # jk_no 컬럼으로 변경
-                        'trainer_id': trainer_id if trainer_id else None,
-                        'owner_id': owner_id if owner_id else None,
-                        'entry_number': safe_int(item.get('rcChul')),
-                        'horse_weight': safe_int(item.get('wgHr')),
-                        'final_rank': safe_int(item.get('rcOrd')),
-                        'finish_time': safe_float(item.get('rcTime')),
-                        'diff_total': safe_float(item.get('diffTot')),
-                        'diff_2nd': safe_float(item.get('rcDiff2')),
-                        'diff_3rd': safe_float(item.get('rcDiff3')),
-                        'diff_4th': safe_float(item.get('rcDiff4')),
-                        'diff_5th': safe_float(item.get('rcDiff5')),
-                        'prize_money': safe_int(item.get('chaksun'))
+                        'jk_no': jk_no,
+                        'trainer_id': trainer_id,
+                        'owner_id': owner_id,
+                        'entry_number': safe_int(item.get('rcChul')),   #출전번호
+                        'horse_weight': safe_int(item.get('wgHr')),     #마체중
+                        'final_rank': safe_int(item.get('rcOrd')),      #순위
+                        'finish_time': safe_float(item.get('rcTime')),  #경주시간(초단위)
+                        #'diff_total': safe_float(item.get('diffTot')),  #1등과 시간차이 누적 
+                        # 'diff_2nd': safe_float(item.get('rcDiff2')),
+                        # 'diff_3rd': safe_float(item.get('rcDiff3')),
+                        # 'diff_4th': safe_float(item.get('rcDiff4')),
+                        # 'diff_5th': safe_float(item.get('rcDiff5')),
+                        # 'prize_money': safe_int(item.get('chaksun'))
                     })
                     
                     # 4. 배당률 정보
@@ -296,14 +292,14 @@ def parse_and_normalize_race_data(api_response):
                         'meet_code': meet_code,
                         'race_no': race_no,
                         'horse_id': horse_id,
-                        'win_odds': safe_float(item.get('rcP1Odd')),
-                        'place_odds': safe_float(item.get('rcP2Odd')),
-                        'show_odds': safe_float(item.get('rcP3Odd')),
-                        'quinella_odds': safe_float(item.get('rcP4Odd')),
-                        'exacta_odds': safe_float(item.get('rcP5Odd')),
-                        'trifecta_odds': safe_float(item.get('rcP6Odd')),
-                        'superfecta_odds': safe_float(item.get('rcP8Odd')),
-                        'win_payout': safe_int(item.get('rcP1Sale')),
+                        'win_odds': safe_float(item.get('rcP1Odd')),    #단승식 배당율
+                        'place_odds': safe_float(item.get('rcP2Odd')),  #연승식 배당율
+                        'show_odds': safe_float(item.get('rcP3Odd')),   #복승식 배당율
+                        'quinella_odds': safe_float(item.get('rcP4Odd')),   #쌍승식 배당율
+                        'exacta_odds': safe_float(item.get('rcP5Odd')),     #복연승식 배당율
+                        'trifecta_odds': safe_float(item.get('rcP6Odd')),   #삼복승식 배당율
+                        'superfecta_odds': safe_float(item.get('rcP8Odd')), #삼쌍승식 배당율
+                        'win_payout': safe_int(item.get('rcP1Sale')),       #단승식 배당금
                         'place_payout': safe_int(item.get('rcP2Sale')),
                         'show_payout': safe_int(item.get('rcP3Sale')),
                         'quinella_payout': safe_int(item.get('rcP4Sale')),
@@ -316,7 +312,6 @@ def parse_and_normalize_race_data(api_response):
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
         
     return {
-        'racetracks': racetracks,
         'races': races,
         'race_entries': race_entries,
         'betting_odds': betting_odds,
@@ -374,7 +369,6 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
     
     # 2. 경주 관련 데이터 저장
     table_order = [
-        ('racetracks', 'racetracks'),
         ('races', 'races'),
         ('race_entries', 'race_entries'),
         ('betting_odds', 'betting_odds')
@@ -495,7 +489,6 @@ def fetch_pages_sequential(start_page=1, max_pages=20):
     # 모든 데이터 통합
     if all_race_data:
         combined_data = {
-            'racetracks': [],
             'races': [],
             'race_entries': [],
             'betting_odds': [],
@@ -508,7 +501,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20):
         }
         
         for data in all_race_data:
-            for key in ['racetracks', 'races', 'race_entries', 'betting_odds']:
+            for key in ['races', 'race_entries', 'betting_odds']:
                 combined_data[key].extend(data.get(key, []))
             
             # 마스터 데이터도 통합
@@ -541,7 +534,7 @@ def collecting_race_results_normalized(start_page=1, max_pages=20):
     total_races = len(race_data.get('races', []))
     logger.info(f"총 {total_races}개 경주, {total_entries}개 경주 기록을 수집했습니다.")
     
-    # 데이터 저장 (마스터 데이터 자동 추가 포함)
+    # 데이터 저장
     saved_counts = save_normalized_data(race_data, existing_master_data, batch_size=150)
     
     if saved_counts:

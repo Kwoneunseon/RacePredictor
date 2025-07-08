@@ -148,7 +148,7 @@ def save_individually(batch_data):
     
     for horse in batch_data:
         try:
-            # 개별 저장 시에도 upsert 사용 (있으면 업데이트, 없으면 삽입)
+            # 개별 저장 시에도 upsert 사용
             result = supabase.table('horses').upsert(horse).execute()
             saved_count += 1
             
@@ -264,7 +264,6 @@ def fetch_pages_sequential(start_page=1, max_pages=50, options={}):
                 horses_data = parse_horse_data(api_data)
                 if horses_data:
                     all_horses_data.extend(horses_data)
-                    logger.info(f"페이지 {page}: {len(horses_data)}마리 수집 (총 {len(all_horses_data)}마리)")
                     empty_pages = 0
                 else:
                     empty_pages += 1
