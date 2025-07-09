@@ -240,7 +240,6 @@ def fetch_pages_sequential(start_page=1, max_pages=10, options={}):
                 jockeys_data = parse_jockey_data(api_data)
                 if jockeys_data:
                     all_jockeys_data.extend(jockeys_data)
-                    logger.info(f"페이지 {page}: {len(jockeys_data)}명 수집 (총 {len(all_jockeys_data)}명)")
                     empty_pages = 0
                 else:
                     empty_pages += 1
