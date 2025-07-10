@@ -7,8 +7,9 @@ from supabase import create_client, Client
 
 from Utils import parse_date, safe_int, safe_float, safe_str
 from .config import API_KEY, SUPABASE_URL, SUPABASE_KEY
-from .collector_horse import fetch_pages_sequential as horse_fetch_page, save_to_supabase_batch as save_horse_data
-from .collector_jockeys import fetch_pages_sequential as jockey_fetch_page, save_to_supabase_batch as save_jockey_data   
+from .collector_horse import fetch_single_horse_data as horse_fetch_page, save_to_supabase_batch as save_horse_data, parse_horse_data
+from .collector_jockeys import fetch_single_jockey_data as jockey_fetch_page, save_to_supabase_batch as save_jockey_data, parse_jockey_data  
+from .collector_trainers import fetch_single_trainer_data as trainer_fetch_page, save_to_supabase_batch as save_trainer_data, parse_trainer_data
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -90,9 +91,10 @@ def save_missing_master_data(missing_data):
             logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
             for batch_start in range(0, len(missing_data['horses'])):
                 horse_id = missing_data['horses'][batch_start]['horse_id']
-                horse_data = horse_fetch_page(start_page=1, max_pages=1, options={'hr_no': horse_id})
+                api_data, _ = horse_fetch_page(horse_id)
+                horse_data = parse_horse_data(api_data)
                 if horse_data:
-                    horse_datas.append(horse_data)
+                    horse_datas.append(horse_data[0])
             save_horse_data(horse_datas)
             saved_counts['horses'] = len(missing_data['horses'])
         else:
@@ -104,54 +106,52 @@ def save_missing_master_data(missing_data):
             logger.info(f"새로운 기수 {len(missing_data['jockeys'])}명 추가")
             for batch_start in range(0, len(missing_data['jockeys'])):
                 jockey_no = missing_data['jockeys'][batch_start]['jk_no']
-                jockey_data = jockey_fetch_page(start_page=1, max_pages=1,options={'jk_no': jockey_no})
+                api_data, _ = jockey_fetch_page(jockey_no)
+                jockey_data = parse_jockey_data(api_data)
                 if jockey_data:
-                    jockey_datas.append(jockey_data)
+                    jockey_datas.append(jockey_data[0])
 
             save_jockey_data(jockey_datas)
             saved_counts['jockeys'] = len(missing_data['jockeys'])
+        else:
+            saved_counts['jockeys'] = 0
             
         # 조교사 정보 저장
         if missing_data['trainers']:
+            trainer_datas = []
             logger.info(f"새로운 조교사 {len(missing_data['trainers'])}명 추가")
             for batch_start in range(0, len(missing_data['trainers'])):
-                batch = missing_data['trainers'][batch_start:batch_start + 100]
-                try:
-                    result = supabase.table('trainers').insert(batch).execute()
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.error(f"조교사 정보 배치 저장 실패: {str(e)}")
-                    # 개별 저장 시도
-                    for trainer in batch:
-                        try:
-                            supabase.table('trainers').insert(trainer).execute()
-                            time.sleep(0.02)
-                        except Exception as individual_error:
-                            logger.debug(f"조교사 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+                trainer_id = missing_data['trainers'][batch_start]['trainer_id']
+                api_data, _ = trainer_fetch_page(trainer_id)
+                trainer_data = parse_trainer_data(api_data)
+                if trainer_data:
+                    trainer_datas.append(trainer_data[0])
+
+            save_trainer_data(trainer_datas)
             saved_counts['trainers'] = len(missing_data['trainers'])
         else:
             saved_counts['trainers'] = 0
             
         # 마주 정보 저장
-        if missing_data['owners']:
-            logger.info(f"새로운 마주 {len(missing_data['owners'])}명 추가")
-            for batch_start in range(0, len(missing_data['owners']), 100):
-                batch = missing_data['owners'][batch_start:batch_start + 100]
-                try:
-                    result = supabase.table('owners').insert(batch).execute()
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.error(f"마주 정보 배치 저장 실패: {str(e)}")
-                    # 개별 저장 시도
-                    for owner in batch:
-                        try:
-                            supabase.table('owners').insert(owner).execute()
-                            time.sleep(0.02)
-                        except Exception as individual_error:
-                            logger.debug(f"마주 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
-            saved_counts['owners'] = len(missing_data['owners'])
-        else:
-            saved_counts['owners'] = 0
+        # if missing_data['owners']:
+        #     logger.info(f"새로운 마주 {len(missing_data['owners'])}명 추가")
+        #     for batch_start in range(0, len(missing_data['owners']), 100):
+        #         batch = missing_data['owners'][batch_start:batch_start + 100]
+        #         try:
+        #             result = supabase.table('owners').insert(batch).execute()
+        #             time.sleep(0.1)
+        #         except Exception as e:
+        #             logger.error(f"마주 정보 배치 저장 실패: {str(e)}")
+        #             # 개별 저장 시도
+        #             for owner in batch:
+        #                 try:
+        #                     supabase.table('owners').insert(owner).execute()
+        #                     time.sleep(0.02)
+        #                 except Exception as individual_error:
+        #                     logger.debug(f"마주 개별 저장 실패 (중복일 수 있음): {str(individual_error)}")
+        #     saved_counts['owners'] = len(missing_data['owners'])
+        # else:
+        saved_counts['owners'] = 0
             
         return saved_counts
         
@@ -211,7 +211,7 @@ def parse_and_normalize_race_data(api_response):
                         races.append({
                             'race_date': race_date,
                             'meet_code': meet_code,
-                            'race_no': race_no,
+                            'race_id': race_no,
                             'race_distance': safe_int(item.get('rcDist')),  #경주거리
                             'race_grade': safe_str(item.get('rcGrade')),    #경주등급
                             'race_age': safe_str(item.get('rcAge')),        #연령조건
@@ -269,11 +269,11 @@ def parse_and_normalize_race_data(api_response):
                     race_entries.append({
                         'race_date': race_date,
                         'meet_code': meet_code,
-                        'race_no': race_no,
+                        'race_id': race_no,
                         'horse_id': horse_id,
                         'jk_no': jk_no,
                         'trainer_id': trainer_id,
-                        'owner_id': owner_id,
+                        #'owner_id': owner_id,
                         'entry_number': safe_int(item.get('rcChul')),   #출전번호
                         'horse_weight': safe_int(item.get('wgHr')),     #마체중
                         'final_rank': safe_int(item.get('rcOrd')),      #순위
@@ -286,27 +286,6 @@ def parse_and_normalize_race_data(api_response):
                         # 'prize_money': safe_int(item.get('chaksun'))
                     })
                     
-                    # 4. 배당률 정보
-                    betting_odds.append({
-                        'race_date': race_date,
-                        'meet_code': meet_code,
-                        'race_no': race_no,
-                        'horse_id': horse_id,
-                        'win_odds': safe_float(item.get('rcP1Odd')),    #단승식 배당율
-                        'place_odds': safe_float(item.get('rcP2Odd')),  #연승식 배당율
-                        'show_odds': safe_float(item.get('rcP3Odd')),   #복승식 배당율
-                        'quinella_odds': safe_float(item.get('rcP4Odd')),   #쌍승식 배당율
-                        'exacta_odds': safe_float(item.get('rcP5Odd')),     #복연승식 배당율
-                        'trifecta_odds': safe_float(item.get('rcP6Odd')),   #삼복승식 배당율
-                        'superfecta_odds': safe_float(item.get('rcP8Odd')), #삼쌍승식 배당율
-                        'win_payout': safe_int(item.get('rcP1Sale')),       #단승식 배당금
-                        'place_payout': safe_int(item.get('rcP2Sale')),
-                        'show_payout': safe_int(item.get('rcP3Sale')),
-                        'quinella_payout': safe_int(item.get('rcP4Sale')),
-                        'exacta_payout': safe_int(item.get('rcP5Sale')),
-                        'trifecta_payout': safe_int(item.get('rcP6Sale')),
-                        'superfecta_payout': safe_int(item.get('rcP8Sale'))
-                    })
                         
     except Exception as e:
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
@@ -314,9 +293,32 @@ def parse_and_normalize_race_data(api_response):
     return {
         'races': races,
         'race_entries': race_entries,
-        'betting_odds': betting_odds,
         'master_data': master_data  # 새로 추가
     }
+
+def filter_duplicates_in_race_and_entries(races, race_entries):
+    """race, race_entries 리스트 내 중복 제거 (race_key, entry_key 기준)"""
+    filtered_races = []
+    seen_race_keys = set()
+    for race in races:
+        race_key = race.get('race_id')
+        if race_key not in seen_race_keys:
+            filtered_races.append(race)
+            seen_race_keys.add(race_key)
+
+    filtered_entries = []
+    seen_entry_keys = set()
+    for entry in race_entries:
+        entry_key = (
+            entry.get('race_id'),
+            entry.get('horse_id')
+        )
+        if entry_key not in seen_entry_keys:
+            filtered_entries.append(entry)
+            seen_entry_keys.add(entry_key)
+
+    return filtered_races, filtered_entries
+
 
 def filter_master_data_duplicates(parsed_master_data, existing_master_data):
     """파싱된 마스터 데이터에서 기존 데이터와 중복 제거"""
@@ -368,25 +370,25 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
                f"마주 {master_saved_counts['owners']}명")
     
     # 2. 경주 관련 데이터 저장
-    table_order = [
-        ('races', 'races'),
-        ('race_entries', 'race_entries'),
-        ('betting_odds', 'betting_odds')
-    ]
-    
-    for table_name, data_key in table_order:
-        data = data_dict.get(data_key, [])
-        if not data:
+    # 중복 제거 및 저장할 테이블 정의
+    races, race_entries = filter_duplicates_in_race_and_entries(
+        data_dict.get('races', []), data_dict.get('race_entries', [])
+    )
+    table_data = {
+        'races': races,
+        'race_entries': race_entries
+    }
+
+    for table_name, records in table_data.items():
+        if not records:
             logger.info(f"{table_name}: 저장할 데이터 없음")
             saved_counts[table_name] = 0
             continue
-            
-        logger.info(f"{table_name} 저장 시작: {len(data)}개")
-        saved_count = save_table_data(table_name, data, batch_size)
-        saved_counts[table_name] = saved_count
-        
+
+        logger.info(f"{table_name} 저장 시작: {len(records)}개")
+        saved_counts[table_name] = save_table_data(table_name, records, batch_size)
         time.sleep(0.2)  # API 제한 방지
-    
+        
     # 마스터 데이터 카운트도 포함
     saved_counts.update(master_saved_counts)
     return saved_counts
@@ -491,7 +493,6 @@ def fetch_pages_sequential(start_page=1, max_pages=20):
         combined_data = {
             'races': [],
             'race_entries': [],
-            'betting_odds': [],
             'master_data': {
                 'horses': [],
                 'jockeys': [],
@@ -501,7 +502,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20):
         }
         
         for data in all_race_data:
-            for key in ['races', 'race_entries', 'betting_odds']:
+            for key in ['races', 'race_entries']:
                 combined_data[key].extend(data.get(key, []))
             
             # 마스터 데이터도 통합

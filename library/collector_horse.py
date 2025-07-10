@@ -327,7 +327,7 @@ def fetch_single_horse_data(horse_id):
     """
     특정 말 ID로 말 정보 API 호출 (fetch_horse_data 래퍼)
     """
-    return fetch_horse_data(page=1, per_page=1, options={"hrNo": horse_id})
+    return fetch_horse_data(page=1, per_page=1, options={"hr_no": horse_id})
 
 def update_single_horse(horse_id):
     """

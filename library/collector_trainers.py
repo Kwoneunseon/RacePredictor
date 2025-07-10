@@ -350,7 +350,7 @@ def fetch_single_trainer_data(trainer_id):
     """
     특정 조교사ID로 조교사정보 API 호출 (fetch_trainer_data 래퍼)
     """
-    return fetch_trainer_data(page=1, per_page=1, options={"hrNo": trainer_id})
+    return fetch_trainer_data(page=1, per_page=1, options={"tr_no": trainer_id})
 
 def update_single_trainer(trainer_id):
     """

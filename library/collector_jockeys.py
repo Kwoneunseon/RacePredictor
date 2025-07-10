@@ -378,7 +378,7 @@ def fetch_single_jockey_data(jockey_no):
     """
     특정 기수 번호로 기수 정보 API 호출
     """
-    return fetch_jockey_data(page=1, per_page=1, options={"jkNo": jockey_no})
+    return fetch_jockey_data(page=1, per_page=1, options={"jk_no": jockey_no})
 
 def update_single_jockey(jockey_no):
     """
