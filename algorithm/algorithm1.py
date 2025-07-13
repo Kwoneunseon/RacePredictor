@@ -158,7 +158,7 @@ class HorseRacing1stPlacePredictor:
             print("❌ 데이터를 가져올 수 없습니다. RPC 함수가 설정되지 않았을 수 있습니다.")
             return self._extract_data_alternative(start_date, end_date)
         
-        df = pd.DataFrame(result.data)
+        df = pd.DataFrame([row["result"] for row in result.data])
         print(f"✅ {len(df)}개 레코드 추출 완료")
         
         return self._preprocess_data(df)
@@ -400,13 +400,13 @@ class HorseRacing1stPlacePredictor:
         
         # 경주 데이터 가져오기
         query_builder = self.supabase.table('race_entries')\
-            .select('*, horses(*), races(*), jockeys(*), trainers(*), betting_odds(*)')\
+            .select('*, horses(*), races(*), jockeys(*), trainers(*)')\
             .eq('race_date', race_date)
         
         if meet_code:
             query_builder = query_builder.eq('meet_code', meet_code)
         if race_no:
-            query_builder = query_builder.eq('races.race_no', race_no)
+            query_builder = query_builder.eq('races.race_id', race_no)
         
         race_data = query_builder.execute()
         
@@ -570,7 +570,7 @@ def main():
         print("🔮 경주 예측 테스트")
         print("=" * 50)
         
-        prediction = predictor.predict_race_winners('2024-12-01', 'SEL', 1)
+        prediction = predictor.predict_race_winners('2024-07-28', '서울', 13)
         print(prediction)
         
         # 3. 백테스팅
