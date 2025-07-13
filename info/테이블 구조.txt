@@ -37,39 +37,44 @@ create index IF not exists idx_jockeys_year_wins on public.jockeys using btree (
 create index IF not exists idx_jockeys_inserted_at on public.jockeys using btree (inserted_at desc) TABLESPACE pg_default;
 create index IF not exists idx_jockeys_win_rate on public.jockeys using btree (total_wins, total_races) TABLESPACE pg_default;
 
--- 1. 경마장 테이블
-CREATE TABLE IF NOT EXISTS racetracks (
-    racetrack_id SERIAL PRIMARY KEY,
-    meet_code TEXT NOT NULL UNIQUE,
-    meet_name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
 -- 4. 조교사 정보 테이블
 CREATE TABLE IF NOT EXISTS trainers (
-    trainer_id TEXT PRIMARY KEY,
-    trainer_name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+   trainer_id TEXT PRIMARY KEY,
+   trainer_name TEXT NOT NULL,
+   meet_code TEXT, -- meet (시행경마장코드)
+   meet_name TEXT, -- meetstring (시행경마장명)
+   trainer_no TEXT, -- trNo (조교사번호)
+   part TEXT, -- part (소속조)
+   birthday TEXT, -- birthday (생년월일)
+   age INTEGER, -- age (나이)
+   debut_date TEXT, -- stDate (데뷔일자)
+   total_races INTEGER, -- rcCntT (통산출주횟수)
+   total_wins INTEGER, -- ord1CntT (통산1위횟수)
+   total_seconds INTEGER, -- ord2CntT (통산2위횟수)
+   total_thirds INTEGER, -- ord3CntT (통산3위횟수)
+   total_win_rate NUMERIC(5,2), -- winRateT (통산승률)
+   total_quinella_rate NUMERIC(5,2), -- qnlRateT (통산복승률)
+   total_place_rate NUMERIC(5,2), -- plcRateT (통산연승률)
+   year_races INTEGER, -- rcCntY (최근1년출주횟수)
+   year_wins INTEGER, -- ord1CntY (최근1년1위횟수)
+   year_seconds INTEGER, -- ord2CntY (최근1년2위횟수)
+   year_thirds INTEGER, -- ord3CntY (최근1년3위횟수)
+   year_win_rate NUMERIC(5,2), -- winRateY (최근1년승률)
+   year_quinella_rate NUMERIC(5,2), -- qnlRateY (최근1년복승률)
+   year_place_rate NUMERIC(5,2), -- plcRateY (최근1년연승률)
+   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 5. 마주 정보 테이블
-CREATE TABLE IF NOT EXISTS owners (
-    owner_id TEXT PRIMARY KEY,
-    owner_name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
 
 -- 6. 경주 기본 정보 테이블
 CREATE TABLE IF NOT EXISTS races (
     race_id SERIAL PRIMARY KEY,
     race_date DATE NOT NULL,
-    meet_code TEXT NOT NULL REFERENCES racetracks(meet_code),
+    meet_code TEXT NOT NULL,
     race_no INTEGER NOT NULL,
     race_distance INTEGER, -- rcDist
-    race_grade TEXT, -- rcGrade
+    race_grade TEXT, -- rcGrade (경주등급, 상금이 크면 : 대상, 평범 : 일반)
     race_age TEXT, -- rcAge (연령조건)
     race_sex TEXT, -- rcSex (성별조건)
     race_type TEXT, -- rcCode (대상경주명)
@@ -95,18 +100,16 @@ CREATE TABLE IF NOT EXISTS races (
 
 -- 7. 경주 참가 기록 테이블 (메인 결과 테이블)
 CREATE TABLE IF NOT EXISTS race_entries (
-    entry_id SERIAL PRIMARY KEY,
+    race_id INTEGER NOT NULL,
+    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
     race_date DATE NOT NULL,
     meet_code TEXT NOT NULL,
-    race_no INTEGER NOT NULL,
-    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
     jk_no TEXT REFERENCES jockeys(jk_no),
     trainer_id TEXT REFERENCES trainers(trainer_id),
     owner_id TEXT REFERENCES owners(owner_id),
     
     -- 출전 정보
     entry_number INTEGER, -- rcChul (출전번호)
-    gate_number INTEGER,
     horse_weight INTEGER, -- wgHr (마체중)
     
     -- 경주 결과
@@ -114,14 +117,14 @@ CREATE TABLE IF NOT EXISTS race_entries (
     finish_time NUMERIC(6,1), -- rcTime (경주기록)
     
     -- 순위차 정보
-    diff_total NUMERIC(4,1), -- diffTot (전체 누적 도착차)
-    diff_2nd NUMERIC(4,1), -- rcDiff2 (2순위별누적착자)
-    diff_3rd NUMERIC(4,1), -- rcDiff3 (3순위별누적착자)
-    diff_4th NUMERIC(4,1), -- rcDiff4 (4순위별누적착자)
-    diff_5th NUMERIC(4,1), -- rcDiff5 (5순위별누적착자)
+    diff_total NUMERIC(4,1), -- diffTot (전체 누적 도착차, 일등과 꼴지 차이)
+    diff_2nd NUMERIC(4,1), -- rcDiff2 (2순위별누적착자, 1등과 2등 차이)
+    diff_3rd NUMERIC(4,1), -- rcDiff3 (3순위별누적착자, 1등과 3등 차이)
+    diff_4th NUMERIC(4,1), -- rcDiff4 (4순위별누적착자, 1등과 4등 차이)
+    diff_5th NUMERIC(4,1), -- rcDiff5 (5순위별누적착자, 1등과 5등 차이)
     
     -- 상금 정보
-    prize_money BIGINT, -- chaksun (착순상금)
+    prize_money BIGINT, -- chaksun (착순상금, 말의 주인이 받는돈)
     
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -132,11 +135,10 @@ CREATE TABLE IF NOT EXISTS race_entries (
 
 -- 8. 배당률 정보 테이블
 CREATE TABLE IF NOT EXISTS betting_odds (
-    odds_id SERIAL PRIMARY KEY,
+    race_id INTEGER NOT NULL,
+    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
     race_date DATE NOT NULL,
     meet_code TEXT NOT NULL,
-    race_no INTEGER NOT NULL,
-    horse_id TEXT NOT NULL REFERENCES horses(horse_id),
     
     -- 배당률 정보
     win_odds NUMERIC(6,1), -- rcP1Odd (단승식 배당률)
@@ -159,9 +161,10 @@ CREATE TABLE IF NOT EXISTS betting_odds (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
-    FOREIGN KEY (race_date, meet_code, race_no) REFERENCES races(race_date, meet_code, race_no),
-    FOREIGN KEY (race_date, meet_code, race_no, horse_id) REFERENCES race_entries(race_date, meet_code, race_no, horse_id),
-    UNIQUE(race_date, meet_code, race_no, horse_id)
+    PRIMARY KEY (race_id, horse_id),
+    FOREIGN KEY (race_id) REFERENCES races(race_id),
+    FOREIGN KEY (race_id, horse_id) REFERENCES race_entries(race_id, horse_id),
+    UNIQUE(race_id, horse_id)
 );
 
 -- =============================================

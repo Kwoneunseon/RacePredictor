@@ -1,4 +1,6 @@
-from library import collecting_trainer_supabase,collecting_race_results_normalized
+from library import collecting_race_results
 
-#collecting_trainer_supabase(method='sequential', start_page=1, max_pages=50)
-collecting_race_results_normalized (start_page=1, max_pages=50)    
+#경마 경주 결과 수집
+collecting_race_results (start_page=1, max_pages=50, start_date='20250706')    
+
+#

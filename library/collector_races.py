@@ -6,7 +6,7 @@ import logging
 from supabase import create_client, Client
 
 from Utils import parse_date, safe_int, safe_float, safe_str
-from .config import API_KEY, SUPABASE_URL, SUPABASE_KEY
+from const import API_KEY, SUPABASE_URL, SUPABASE_KEY
 from .collector_horse import fetch_single_horse_data as horse_fetch_page, save_to_supabase_batch as save_horse_data, parse_horse_data
 from .collector_jockeys import fetch_single_jockey_data as jockey_fetch_page, save_to_supabase_batch as save_jockey_data, parse_jockey_data  
 from .collector_trainers import fetch_single_trainer_data as trainer_fetch_page, save_to_supabase_batch as save_trainer_data, parse_trainer_data
@@ -24,14 +24,17 @@ logging.getLogger("postgrest").setLevel(logging.WARNING)
 # Supabase 클라이언트 초기화
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-
-def fetch_race_data(page=1, per_page=1000):
+def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
     """경주 결과 API에서 데이터 가져오는 함수"""
     params = {
         "serviceKey": API_KEY,
         "pageNo": page,
         "numOfRows": per_page,
+        # 시작일 (기본값: None)
+        **({"rc_date_fr": start_date} if start_date else {}),
+        "rc_date_to": end_date,  # 종료일
         "_type": 'json'
+
     }
 
     try:
@@ -44,7 +47,7 @@ def fetch_race_data(page=1, per_page=1000):
         elif response.status_code == 429:
             logger.warning(f"API 호출 제한 - 페이지 {page}, 5초 대기 후 재시도")
             time.sleep(5)
-            return fetch_race_data(page, per_page)
+            return fetch_race_data(page, per_page, start_date, end_date)
         else:
             logger.error(f"API 호출 실패 - 페이지 {page}: {response.status_code}")
             return None, page
@@ -455,14 +458,14 @@ def save_individual_records(table_name, records):
     
     return saved_count
 
-def fetch_pages_sequential(start_page=1, max_pages=20):
+def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date=datetime.now().strftime('%Y%m%d')):
     """순차적으로 경주 결과 데이터 수집"""
     all_race_data = []
     empty_pages = 0
     
     for page in range(start_page, start_page + max_pages):
         try:
-            api_data, _ = fetch_race_data(page=page)
+            api_data, _ = fetch_race_data(page=page, start_date=start_date, end_date=end_date)
             
             if api_data:
                 parsed_data = parse_and_normalize_race_data(api_data)
@@ -514,7 +517,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20):
     
     return {}
 
-def collecting_race_results_normalized(start_page=1, max_pages=20):
+def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_date=datetime.now().strftime('%Y%m%d')):
     """정규화된 구조로 경주 결과 수집 메인 함수"""
     logger.info("정규화된 경주 결과 수집을 시작합니다...")
     logger.info(f"시작 페이지: {start_page}, 최대 페이지: {max_pages}")
@@ -525,7 +528,7 @@ def collecting_race_results_normalized(start_page=1, max_pages=20):
     start_time = time.time()
     
     # 데이터 수집
-    race_data = fetch_pages_sequential(start_page=start_page, max_pages=max_pages)
+    race_data = fetch_pages_sequential(start_page=start_page, max_pages=max_pages, start_date= start_date, end_date=end_date)
     
     if not race_data or not race_data.get('race_entries'):
         logger.warning("수집된 경주 결과가 없습니다.")
