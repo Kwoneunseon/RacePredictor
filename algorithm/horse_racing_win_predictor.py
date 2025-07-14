@@ -8,17 +8,19 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from supabase import create_client, Client
 import warnings
 from datetime import datetime, timedelta
-# algorithm1.py
 import sys
 import os
+import json
+
+# 상위 디렉토리의 const.py 가져오기
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from const import API_KEY, SUPABASE_URL, SUPABASE_KEY
 
-# import matplotlib.pyplot as plt
-# import seaborn as sns
 warnings.filterwarnings('ignore')
 
-class HorseRacing1stPlacePredictor:
+class HorseRacingWinPredictor:
+    """경마 단승(1등) 예측 모델"""
+    
     def __init__(self, supabase_url, supabase_key):
         """
         경마 1등 예측 모델 초기화
@@ -37,7 +39,7 @@ class HorseRacing1stPlacePredictor:
         """
         훈련용 데이터 추출 및 특성 생성
         """
-        print("📊 데이터 추출 중...")
+        print("📊 단승 예측용 데이터 추출 중...")
         
         # 기본 경주 데이터 추출
         query = """
@@ -151,84 +153,24 @@ class HorseRacing1stPlacePredictor:
         """
 
         # Supabase에서 직접 SQL 실행
-        result = self.supabase.rpc('execute_sql', {
-            'sql_query': query, 
-            'params': [start_date, end_date, end_date, start_date, end_date]
-        }).execute()
-        if not result.data:
-            print("❌ 데이터를 가져올 수 없습니다. RPC 함수가 설정되지 않았을 수 있습니다.")
-            return self._extract_data_alternative(start_date, end_date)
-        
-        df = pd.DataFrame([row["result"] for row in result.data])
-        print(f"✅ {len(df)}개 레코드 추출 완료")
-        
-        return self._preprocess_data(df, is_training=True)
-    
-    def _extract_data_alternative(self, start_date, end_date):
-        """
-        RPC 함수가 없을 때 대안적 데이터 추출 방법
-        """
-        print("🔄 대안적 방법으로 데이터 추출...")
-        
-        # 기본 데이터 추출
-        race_entries = self.supabase.table('race_entries')\
-            .select('*, horses(*), races(*), jockeys(*), trainers(*), betting_odds(*)')\
-            .gte('race_date', start_date)\
-            .lte('race_date', end_date)\
-            .not_.is_('final_rank', 'null')\
-            .execute()
-        
-        if not race_entries.data:
-            print("❌ 데이터가 없습니다.")
+        try:
+            result = self.supabase.rpc('execute_sql', {
+                'sql_query': query, 
+                'params': [start_date, end_date, end_date, start_date, end_date]
+            }).execute()
+            
+            if not result.data:
+                print("❌ 데이터를 가져올 수 없습니다.")
+                return pd.DataFrame()
+            
+            df = pd.DataFrame([row["result"] for row in result.data])
+            print(f"✅ {len(df)}개 레코드 추출 완료")
+            
+            return self._preprocess_data(df, is_training=True)
+            
+        except Exception as e:
+            print(f"❌ 데이터 추출 오류: {e}")
             return pd.DataFrame()
-        
-        df = pd.DataFrame(race_entries.data)
-        df = self._flatten_supabase_data(df)
-        df = self._calculate_features_python(df)
-        
-        return self._preprocess_data(df)
-    
-    def _flatten_supabase_data(self, df):
-        """중첩된 Supabase 데이터 평면화"""
-        # horses 데이터 평면화
-        if 'horses' in df.columns:
-            horses_df = pd.json_normalize(df['horses'])
-            horses_df.columns = ['horse_' + col for col in horses_df.columns]
-            df = pd.concat([df.drop('horses', axis=1), horses_df], axis=1)
-        
-        # races 데이터 평면화
-        if 'races' in df.columns:
-            races_df = pd.json_normalize(df['races'])
-            races_df.columns = ['race_' + col for col in races_df.columns]
-            df = pd.concat([df.drop('races', axis=1), races_df], axis=1)
-        
-        # 기타 테이블들도 동일하게 처리
-        for table in ['jockeys', 'trainers', 'betting_odds']:
-            if table in df.columns:
-                table_df = pd.json_normalize(df[table])
-                table_df.columns = [table[:-1] + '_' + col for col in table_df.columns]
-                df = pd.concat([df.drop(table, axis=1), table_df], axis=1)
-        
-        return df
-    
-    def _calculate_features_python(self, df):
-        """Python으로 특성 계산"""
-        df = df.sort_values(['horse_id', 'race_date'])
-        
-        # 말별 과거 성적 계산
-        df['prev_total_races'] = df.groupby('horse_id').cumcount()
-        df['prev_5_avg_rank'] = df.groupby('horse_id')['final_rank'].rolling(5, min_periods=1).mean().shift(1).values
-        df['prev_total_avg_rank'] = df.groupby('horse_id')['final_rank'].expanding().mean().shift(1).values
-        df['prev_wins'] = df.groupby('horse_id')['final_rank'].apply(lambda x: (x == 1).cumsum().shift(1)).values
-        df['prev_top3'] = df.groupby('horse_id')['final_rank'].apply(lambda x: (x <= 3).cumsum().shift(1)).values
-        
-        # 1등 여부
-        df['is_winner'] = (df['final_rank'] == 1).astype(int)
-        
-        # 최소 3경주 이상 출전한 말만 필터링
-        df = df[df['prev_total_races'] >= 3]
-        
-        return df
     
     def _preprocess_data(self, df, is_training=False):
         """
@@ -237,7 +179,7 @@ class HorseRacing1stPlacePredictor:
             df: 처리할 데이터프레임
             is_training: 학습용 데이터인지 여부
         """
-        print("🔧 데이터 전처리 중...")
+        print("🔧 단승용 데이터 전처리 중...")
         
         # 결측치 처리
         numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -254,7 +196,7 @@ class HorseRacing1stPlacePredictor:
             for col in categorical_cols:
                 if col in df.columns:
                     before_len = len(df)
-                    df = df.dropna(subset=[col])  # 해당 컬럼이 결측인 행 제거
+                    df = df.dropna(subset=[col])
                     after_len = len(df)
                     if before_len != after_len:
                         print(f"   {col} 결측값 {before_len - after_len}개 행 제거")
@@ -281,7 +223,7 @@ class HorseRacing1stPlacePredictor:
                         df[col] = self._safe_transform_with_unknown(df[col], col)
                     else:
                         print(f"⚠️ {col}에 대한 LabelEncoder가 없습니다!")
-                        df[col] = 0  # 기본값으로 처리
+                        df[col] = 0
         
         # 새로운 특성 생성
         df['jockey_win_rate'] = df['jockey_total_wins'] / (df['jockey_total_races'] + 1)
@@ -297,7 +239,6 @@ class HorseRacing1stPlacePredictor:
         
         print(f"✅ 전처리 완료: {len(df)}개 레코드")
         return df
-
 
     def _safe_transform_with_unknown(self, series, column_name):
         """
@@ -318,9 +259,8 @@ class HorseRacing1stPlacePredictor:
             for unseen_val in unseen_values:
                 series_copy = series_copy.replace(unseen_val, 'unknown')
             
-            # unknown도 학습된 클래스에 없다면 (이런 경우는 없어야 하지만)
+            # unknown도 학습된 클래스에 없다면
             if 'unknown' not in known_classes:
-                # 가장 빈번한 클래스로 대체
                 most_common = encoder.classes_[0]
                 series_copy = series_copy.replace('unknown', most_common)
                 print(f"   unknown을 {most_common}으로 대체")
@@ -333,7 +273,7 @@ class HorseRacing1stPlacePredictor:
         """
         1등 예측 모델 훈련
         """
-        print("🤖 모델 훈련 중...")
+        print("🤖 단승 예측 모델 훈련 중...")
         
         # 특성 선택
         feature_cols = [
@@ -341,7 +281,7 @@ class HorseRacing1stPlacePredictor:
             'horse_weight', 'race_grade', 'track_condition', 'weather',
             'prev_total_races', 'prev_5_avg_rank', 'prev_total_avg_rank',
             'jockey_win_rate', 'trainer_win_rate', 'horse_win_rate', 'horse_top3_rate',
-            'popularity_score', 'experience_score', 'recent_form', 'win_odds'
+            'experience_score', 'recent_form'
         ]
         
         # 실제로 존재하는 컬럼만 선택
@@ -404,9 +344,9 @@ class HorseRacing1stPlacePredictor:
             
             # 성능 평가
             accuracy = accuracy_score(y_test, y_pred)
-            precision = precision_score(y_test, y_pred)
-            recall = recall_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred)
+            precision = precision_score(y_test, y_pred, zero_division=0)
+            recall = recall_score(y_test, y_pred, zero_division=0)
+            f1 = f1_score(y_test, y_pred, zero_division=0)
             auc = roc_auc_score(y_test, y_prob)
             
             results[name] = {
@@ -415,9 +355,7 @@ class HorseRacing1stPlacePredictor:
                 'precision': precision,
                 'recall': recall,
                 'f1': f1,
-                'auc': auc,
-                'predictions': y_pred,
-                'probabilities': y_prob
+                'auc': auc
             }
             
             print(f"  정확도: {accuracy:.3f}")
@@ -429,7 +367,8 @@ class HorseRacing1stPlacePredictor:
         self.models = results
         
         # 앙상블 예측
-        ensemble_prob = np.mean([results[name]['probabilities'] for name in results], axis=0)
+        ensemble_prob = np.mean([results[name]['model'].predict_proba(X_test if name != 'LogisticRegression' else X_test_scaled)[:, 1] 
+                                for name in results], axis=0)
         ensemble_pred = (ensemble_prob > 0.5).astype(int)
         
         ensemble_accuracy = accuracy_score(y_test, ensemble_pred)
@@ -439,30 +378,14 @@ class HorseRacing1stPlacePredictor:
         print(f"  정확도: {ensemble_accuracy:.3f}")
         print(f"  AUC: {ensemble_auc:.3f}")
         
-        # 특성 중요도 (RandomForest 기준)
-        feature_importance = pd.DataFrame({
-            'feature': feature_cols,
-            'importance': results['RandomForest']['model'].feature_importances_
-        }).sort_values('importance', ascending=False)
-        
-        print(f"\n📊 특성 중요도 TOP 10:")
-        for idx, row in feature_importance.head(10).iterrows():
-            print(f"  {row['feature']}: {row['importance']:.3f}")
-        
-        return {
-            'test_data': df_sorted.iloc[split_idx:],
-            'results': results,
-            'ensemble_accuracy': ensemble_accuracy,
-            'ensemble_auc': ensemble_auc,
-            'feature_importance': feature_importance
-        }
+        return results
     
     def predict_race_winners(self, race_date, meet_code=None, race_no=None):
         """
         특정 경주의 1등 예측
         """
-        print(f"🔮 {race_date} 경주 예측 중...")       
-   
+        print(f"🔮 {race_date} 단승 예측 중...")
+        
         # WHERE 조건 구성
         where_conditions = [f"re.race_date = '{race_date}'"]
         if meet_code:
@@ -473,232 +396,203 @@ class HorseRacing1stPlacePredictor:
         where_clause = " AND ".join(where_conditions)
         
         query = f"""
-                SELECT row_to_json(r) as result
-                from (
-                    SELECT 
-                    re.race_id,
-                    re.horse_id,
-                    re.race_date,
-                    re.meet_code,
-                    re.entry_number,
-                    re.horse_weight,
-                    re.final_rank,
-                    CASE WHEN re.final_rank = 1 THEN 1 ELSE 0 END as is_winner,
-                    
-                    -- 말 정보
-                    h.age as horse_age,
-                    CASE WHEN h.gender = '수컷' THEN 1 ELSE 0 END as is_male,
-                    h.rank as horse_class,
-                    h.name as horse_name,
-                    
-                    -- 경주 정보
-                    r.race_distance,
-                    r.total_horses,
-                    r.planned_horses,
-                    r.race_grade,
-                    r.track_condition,
-                    r.weather,
-                    r.weight_type,   
-
-                    -- 기수 정보
-                    j.total_races as jockey_total_races,
-                    j.total_wins as jockey_total_wins,
-                    j.year_races as jockey_year_races,
-                    j.year_wins as jockey_year_wins,
-                    
-                    -- 조교사 정보
-                    t.rc_cnt_t as trainer_total_races,
-                    t.ord1_cnt_t as trainer_total_wins,
-                    t.rc_cnt_y as trainer_year_races,
-                    t.ord1_cnt_y as trainer_year_wins
-                                            
-                    FROM race_entries re
-                    JOIN horses h ON re.horse_id = h.horse_id
-                    JOIN races r ON re.race_id = r.race_id
-                    LEFT JOIN jockeys j ON re.jk_no = j.jk_no
-                    LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
-                    WHERE {where_clause}
-                    ORDER BY re.entry_number
-                )r
-                """
+        SELECT row_to_json(r) as result
+        from (
+            SELECT 
+                re.race_id, re.horse_id, re.race_date, re.meet_code, re.entry_number,
+                re.horse_weight, re.final_rank,
+                h.age as horse_age,
+                CASE WHEN h.gender = '수컷' THEN 1 ELSE 0 END as is_male,
+                h.rank as horse_class, h.name as horse_name,
+                r.race_distance, r.total_horses, r.planned_horses,
+                r.race_grade, r.track_condition, r.weather, r.weight_type,
+                j.total_races as jockey_total_races, j.total_wins as jockey_total_wins,
+                j.year_races as jockey_year_races, j.year_wins as jockey_year_wins,
+                t.rc_cnt_t as trainer_total_races, t.ord1_cnt_t as trainer_total_wins,
+                t.rc_cnt_y as trainer_year_races, t.ord1_cnt_y as trainer_year_wins
+            FROM race_entries re
+            JOIN horses h ON re.horse_id = h.horse_id
+            JOIN races r ON re.race_id = r.race_id
+            LEFT JOIN jockeys j ON re.jk_no = j.jk_no
+            LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
+            WHERE {where_clause}
+            ORDER BY re.entry_number
+        )r
+        """
+        
+        try:
+            result = self.supabase.rpc('execute_sql', {'sql_query': query, 'params': []}).execute()
+            
+            if not result.data:
+                return "❌ 해당 경주에 대한 데이터가 없습니다."
+            
+            df = pd.DataFrame([row["result"] for row in result.data])
+            df = self._calculate_prediction_features(df, race_date)
+            df = self._preprocess_data(df, is_training=False)
+            
+            # 예측 수행
+            predictions = []
+            
+            for name, result in self.models.items():
+                model = result['model']
                 
-        result = self.supabase.rpc('execute_sql', {
-            'sql_query': query,
-            'params': []
-        }).execute()
-
-        if not result.data:
-            return "❌ 해당 경주에 대한 데이터가 없습니다."
-        
-        df = pd.DataFrame([row["result"] for row in result.data])
-        df = self._flatten_supabase_data(df)
-        
-        # 각 말의 과거 데이터 계산 (실제로는 더 복잡한 로직 필요)
-        df = self._calculate_prediction_features(df, race_date)
-        df = self._preprocess_data(df, is_training=False)
-        
-        # 예측 수행
-        predictions = []
-        
-        for name, result in self.models.items():
-            model = result['model']
+                if name == 'LogisticRegression':
+                    X_scaled = self.scaler.transform(df[self.feature_columns])
+                    prob = model.predict_proba(X_scaled)[:, 1]
+                else:
+                    prob = model.predict_proba(df[self.feature_columns])[:, 1]
+                
+                predictions.append(prob)
             
-            if name == 'LogisticRegression':
-                X_scaled = self.scaler.transform(df[self.feature_columns])
-                prob = model.predict_proba(X_scaled)[:, 1]
-            else:
-                prob = model.predict_proba(df[self.feature_columns])[:, 1]
+            # 앙상블 예측
+            ensemble_prob = np.mean(predictions, axis=0)
             
-            predictions.append(prob)
-        
-        # 앙상블 예측
-        ensemble_prob = np.mean(predictions, axis=0)
-        
-        # 결과 정리
-        result_df = df[['horse_name', 'entry_number']].copy()
-        result_df['win_probability'] = ensemble_prob
-        result_df['prediction_rank'] = result_df['win_probability'].rank(ascending=False)
-        
-        return result_df.sort_values('win_probability', ascending=False)
-    
-    # 더 엄격한 학습 데이터 필터링
-    def _filter_training_data(self, df):
-        """
-        학습 데이터에서 품질이 낮은 데이터 제거
-        """
-        initial_len = len(df)
-        
-        # 1. 필수 컬럼들이 모두 있는 행만 유지
-        required_cols = ['horse_class', 'race_grade', 'track_condition', 'weather', 
-                        'prev_total_races', 'jockey_total_races', 'trainer_total_races']
-        
-        for col in required_cols:
-            if col in df.columns:
-                df = df.dropna(subset=[col])
-        
-        # 2. 이상한 값들 제거
-        df = df[df['prev_total_races'] >= 3]  # 최소 3경주 이상
-        df = df[df['horse_age'] >= 2]         # 2세 이상
-        df = df[df['horse_age'] <= 10]        # 10세 이하
-        
-        print(f"📊 데이터 필터링: {initial_len} → {len(df)} ({len(df)/initial_len*100:.1f}%)")
-        
-        return df
+            # 결과 정리
+            result_df = df[['horse_name', 'entry_number']].copy()
+            result_df['win_probability'] = ensemble_prob
+            result_df['prediction_rank'] = result_df['win_probability'].rank(ascending=False)
+            result_df['confidence'] = result_df['win_probability'].apply(
+                lambda x: 'High' if x > 0.6 else 'Medium' if x > 0.4 else 'Low'
+            )
+            
+            return result_df.sort_values('win_probability', ascending=False)
+            
+        except Exception as e:
+            print(f"❌ 예측 오류: {e}")
+            return f"예측 중 오류가 발생했습니다: {e}"
     
     def _calculate_prediction_features(self, df, current_date):
         """예측용 특성 계산"""
         # 각 말의 과거 성적을 current_date 이전 데이터로 계산
-        # 실제 구현에서는 별도 쿼리로 과거 데이터를 가져와야 함
-        
         for horse_id in df['horse_id'].unique():
-            # 과거 성적 조회 쿼리
-            past_races = self.supabase.table('race_entries')\
-                .select('final_rank')\
-                .eq('horse_id', horse_id)\
-                .lt('race_date', current_date)\
-                .order('race_date', desc=True)\
-                .execute()
-            
-            if past_races.data:
-                ranks = [r['final_rank'] for r in past_races.data]
+            try:
+                past_races = self.supabase.table('race_entries')\
+                    .select('final_rank')\
+                    .eq('horse_id', horse_id)\
+                    .lt('race_date', current_date)\
+                    .order('race_date', desc=True)\
+                    .execute()
                 
-                # 특성 계산
-                mask = df['horse_id'] == horse_id
-                df.loc[mask, 'prev_total_races'] = len(ranks)
-                df.loc[mask, 'prev_5_avg_rank'] = np.mean(ranks[:5]) if ranks else 6
-                df.loc[mask, 'prev_total_avg_rank'] = np.mean(ranks) if ranks else 6
-                df.loc[mask, 'prev_wins'] = sum(1 for r in ranks if r == 1)
-                df.loc[mask, 'prev_top3'] = sum(1 for r in ranks if r <= 3)
+                if past_races.data:
+                    ranks = [r['final_rank'] for r in past_races.data if r['final_rank'] is not None]
+                    
+                    # 특성 계산
+                    mask = df['horse_id'] == horse_id
+                    df.loc[mask, 'prev_total_races'] = len(ranks)
+                    df.loc[mask, 'prev_5_avg_rank'] = np.mean(ranks[:5]) if ranks else 6
+                    df.loc[mask, 'prev_total_avg_rank'] = np.mean(ranks) if ranks else 6
+                    df.loc[mask, 'prev_wins'] = sum(1 for r in ranks if r == 1)
+                    df.loc[mask, 'prev_top3'] = sum(1 for r in ranks if r <= 3)
+                else:
+                    # 과거 기록이 없는 경우 기본값
+                    mask = df['horse_id'] == horse_id
+                    df.loc[mask, 'prev_total_races'] = 0
+                    df.loc[mask, 'prev_5_avg_rank'] = 6
+                    df.loc[mask, 'prev_total_avg_rank'] = 6
+                    df.loc[mask, 'prev_wins'] = 0
+                    df.loc[mask, 'prev_top3'] = 0
+                    
+            except Exception as e:
+                print(f"⚠️ {horse_id} 과거 데이터 계산 오류: {e}")
+                continue
         
         return df
     
     def backtest_strategy(self, start_date, end_date, confidence_threshold=0.6):
         """
-        백테스팅 전략
+        단승 백테스팅 전략
         """
-        print(f"📈 백테스팅 수행: {start_date} ~ {end_date}")
+        print(f"📈 단승 백테스팅 수행: {start_date} ~ {end_date}")
         
-        # 기간별 모든 경주 조회
-        races = self.supabase.table('races')\
-            .select('race_date, meet_code, race_id')\
-            .gte('race_date', start_date)\
-            .lte('race_date', end_date)\
-            .execute()
-        
-        total_bets = 0
-        total_profit = 0
-        wins = 0
-        
-        for race in races.data[:50]:  # 테스트용으로 50경주만
-            try:
-                predictions = self.predict_race_winners(
-                    race['race_date'], 
-                    race['meet_code'], 
-                    race['race_id']
-                )
-                
-                if isinstance(predictions, str):
-                    continue
-                
-                # 가장 확신하는 말에 베팅
-                best_horse = predictions.iloc[0]
-                
-                if best_horse['win_probability'] > confidence_threshold:
-                    total_bets += 1
+        try:
+            # 기간별 모든 경주 조회
+            races = self.supabase.table('races')\
+                .select('race_date, meet_code, race_id')\
+                .gte('race_date', start_date)\
+                .lte('race_date', end_date)\
+                .execute()
+            
+            total_bets = 0
+            total_profit = 0
+            wins = 0
+            bet_amount = 1000  # 1건당 1천원
+            
+            for race in races.data[:50]:  # 테스트용으로 50경주만
+                try:
+                    predictions = self.predict_race_winners(
+                        race['race_date'], 
+                        race['meet_code'], 
+                        race['race_id']
+                    )
                     
-                    # 실제 결과 확인
-                    actual_result = self.supabase.table('race_entries')\
-                        .select('final_rank')\
-                        .eq('race_date', race['race_date'])\
-                        .eq('meet_code', race['meet_code'])\
-                        .eq('entry_number', best_horse['entry_number'])\
-                        .execute()
+                    if isinstance(predictions, str):
+                        continue
                     
-                    if actual_result.data and actual_result.data[0]['final_rank'] == 1:
-                        wins += 1
-                        profit = 1000 * best_horse['win_odds'] - 1000
-                        total_profit += profit
-                    else:
-                        total_profit -= 1000
+                    # 가장 확신하는 말에 베팅
+                    best_horse = predictions.iloc[0]
+                    
+                    if best_horse['win_probability'] > confidence_threshold:
+                        total_bets += 1
                         
-            except Exception as e:
-                print(f"오류: {e}")
-                continue
-        
-        if total_bets > 0:
-            win_rate = wins / total_bets
-            roi = (total_profit / (total_bets * 1000)) * 100
+                        # 실제 결과 확인
+                        actual_result = self.supabase.table('race_entries')\
+                            .select('final_rank')\
+                            .eq('race_date', race['race_date'])\
+                            .eq('meet_code', race['meet_code'])\
+                            .eq('entry_number', best_horse['entry_number'])\
+                            .execute()
+                        
+                        if actual_result.data and actual_result.data[0]['final_rank'] == 1:
+                            wins += 1
+                            # 단승 배당률 (평균 2-8배 가정)
+                            payout_ratio = np.random.uniform(2, 8)
+                            profit = bet_amount * payout_ratio - bet_amount
+                            total_profit += profit
+                            print(f"✅ 적중! {race['race_date']} {best_horse['entry_number']}번 -> +{profit:,.0f}원")
+                        else:
+                            total_profit -= bet_amount
+                            print(f"❌ 실패: {race['race_date']} {best_horse['entry_number']}번")
+                            
+                except Exception as e:
+                    print(f"경주 처리 오류: {e}")
+                    continue
             
-            print(f"\n📊 백테스팅 결과:")
-            print(f"  총 베팅: {total_bets}회")
-            print(f"  적중: {wins}회")
-            print(f"  적중률: {win_rate:.1%}")
-            print(f"  총 수익: {total_profit:,}원")
-            print(f"  ROI: {roi:.1f}%")
-            
-            return {
-                'total_bets': total_bets,
-                'wins': wins,
-                'win_rate': win_rate,
-                'total_profit': total_profit,
-                'roi': roi
-            }
-        else:
-            print("베팅할 경주가 없었습니다.")
+            if total_bets > 0:
+                win_rate = wins / total_bets
+                roi = (total_profit / (total_bets * bet_amount)) * 100
+                
+                print(f"\n📊 단승 백테스팅 결과:")
+                print(f"  총 베팅: {total_bets}회")
+                print(f"  적중: {wins}회")
+                print(f"  적중률: {win_rate:.1%}")
+                print(f"  총 투자: {total_bets * bet_amount:,}원")
+                print(f"  총 수익: {total_profit:,}원")
+                print(f"  ROI: {roi:.1f}%")
+                
+                return {
+                    'total_bets': total_bets,
+                    'wins': wins,
+                    'win_rate': win_rate,
+                    'total_investment': total_bets * bet_amount,
+                    'total_profit': total_profit,
+                    'roi': roi
+                }
+            else:
+                print("베팅할 경주가 없었습니다.")
+                return None
+                
+        except Exception as e:
+            print(f"❌ 백테스팅 오류: {e}")
             return None
 
 # 사용 예시
 def main():
-    # Supabase 설정
-    _SUPABASE_URL = SUPABASE_URL
-    _SUPABASE_KEY = SUPABASE_KEY
-    
     # 모델 초기화
-    predictor = HorseRacing1stPlacePredictor(SUPABASE_URL, SUPABASE_KEY)
+    predictor = HorseRacingWinPredictor(SUPABASE_URL, SUPABASE_KEY)
     
     # 1. 데이터 추출 및 모델 훈련
     print("=" * 50)
-    print("🏇 경마 1등 예측 모델 훈련")
+    print("🏇 경마 단승 예측 모델 훈련")
     print("=" * 50)
     
     df = predictor.extract_training_data('2023-01-01', '2024-11-30')
@@ -708,7 +602,7 @@ def main():
         
         # 2. 특정 경주 예측
         print("\n" + "=" * 50)
-        print("🔮 경주 예측 테스트")
+        print("🔮 단승 예측 테스트")
         print("=" * 50)
         
         prediction = predictor.predict_race_winners('2024-07-28', '서울', 13)
@@ -716,7 +610,7 @@ def main():
         
         # 3. 백테스팅
         print("\n" + "=" * 50)
-        print("📈 백테스팅 테스트")
+        print("📈 단승 백테스팅 테스트")
         print("=" * 50)
         
         backtest_result = predictor.backtest_strategy('2024-12-01', '2024-12-31')
