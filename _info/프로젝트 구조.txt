@@ -1,0 +1,19 @@
+horse_racing_ai/
+├── config.py                 # 모든 설정 중앙화
+├── main.py                   # 통합 실행 파일
+├── 
+├── core/                     # 핵심 비즈니스 로직
+│   ├── data_extractor.py     # 추출 
+│   ├── preprocessor.py       # 데이터 전처리 
+│   ├── model_trainer.py      # 모델 학습
+│   ├── model_manager.py      # 모델 관리
+│   ├── predictor.py          # 예측 수행
+│   └── backtester.py         # 백테스트
+│
+├── utils/
+│   ├── database.py           # DB 연결 관리 
+│   ├── logger.py             # 로깅 
+│   └── helpers.py            #
+│
+├── models/                   # 저장된 모델들
+└── logs/                     # 로그 파일들

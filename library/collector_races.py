@@ -6,7 +6,7 @@ import logging
 from supabase import create_client, Client
 
 from Utils import parse_date, safe_int, safe_float, safe_str
-from const import API_KEY, SUPABASE_URL, SUPABASE_KEY
+from _const import API_KEY, SUPABASE_URL, SUPABASE_KEY
 from .collector_horse import fetch_single_horse_data as horse_fetch_page, save_to_supabase_batch as save_horse_data, parse_horse_data
 from .collector_jockeys import fetch_single_jockey_data as jockey_fetch_page, save_to_supabase_batch as save_jockey_data, parse_jockey_data  
 from .collector_trainers import fetch_single_trainer_data as trainer_fetch_page, save_to_supabase_batch as save_trainer_data, parse_trainer_data
@@ -300,11 +300,11 @@ def parse_and_normalize_race_data(api_response):
     }
 
 def filter_duplicates_in_race_and_entries(races, race_entries):
-    """race, race_entries 리스트 내 중복 제거 (race_key, entry_key 기준)"""
+    """race, race_entries 리스트 내 중복 제거 (race_date + race_id, entry_key 기준)"""
     filtered_races = []
     seen_race_keys = set()
     for race in races:
-        race_key = race.get('race_id')
+        race_key = (race.get('race_date'), race.get('race_id'))  # race_date + race_id 조합
         if race_key not in seen_race_keys:
             filtered_races.append(race)
             seen_race_keys.add(race_key)
@@ -313,6 +313,7 @@ def filter_duplicates_in_race_and_entries(races, race_entries):
     seen_entry_keys = set()
     for entry in race_entries:
         entry_key = (
+            entry.get('race_date'),  # race_date 추가
             entry.get('race_id'),
             entry.get('horse_id')
         )

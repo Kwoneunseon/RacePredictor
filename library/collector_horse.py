@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from supabase import create_client, Client
 
-from const import API_KEY, SUPABASE_URL, SUPABASE_KEY  # config 파일 수정 필요
+from _const import API_KEY, SUPABASE_URL, SUPABASE_KEY  # config 파일 수정 필요
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
