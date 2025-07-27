@@ -25,7 +25,7 @@ logging.getLogger("postgrest").setLevel(logging.WARNING)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
-    """경주 결과 API에서 데이터 가져오는 함수"""
+    """서울 경주 결과 API에서 데이터 가져오는 함수"""
     params = {
         "serviceKey": API_KEY,
         "pageNo": page,
@@ -38,7 +38,7 @@ def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
     }
 
     try:
-        endpoint = "http://apis.data.go.kr/B551015/API186_1/SeoulRace_1"
+        endpoint = "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1"
         response = requests.get(endpoint, params=params, timeout=30)
         
         if response.status_code == 200:
@@ -48,6 +48,36 @@ def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
             logger.warning(f"API 호출 제한 - 페이지 {page}, 5초 대기 후 재시도")
             time.sleep(5)
             return fetch_race_data(page, per_page, start_date, end_date)
+        else:
+            logger.error(f"API 호출 실패 - 페이지 {page}: {response.status_code}")
+            return None, page
+
+    except Exception as e:
+        logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
+        return None, page
+    
+def fetch_race_data_jeju(page=1, per_page=1000 ,start_date=None, end_date=None):
+    """제주 부경 경주 결과 API에서 데이터 가져오는 함수"""
+    params = {
+        "serviceKey": API_KEY,
+        "pageNo": page,
+        "numOfRows": per_page,
+        "rc_month": end_date[:6],  # 종료일
+        "_type": 'json'
+
+    }
+
+    try:
+        endpoint = "http://apis.data.go.kr/B551015/API4_3/raceResult_3"
+        response = requests.get(endpoint, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data, page
+        elif response.status_code == 429:
+            logger.warning(f"API 호출 제한 - 페이지 {page}, 5초 대기 후 재시도")
+            time.sleep(5)
+            return fetch_race_data_jeju(page, per_page, start_date, end_date)
         else:
             logger.error(f"API 호출 실패 - 페이지 {page}: {response.status_code}")
             return None, page
@@ -194,16 +224,16 @@ def parse_and_normalize_race_data(api_response):
                     race_date = parse_date(item.get('rcDate')) #경마일자
                     meet_code = safe_str(item.get('meet'))  #경마장 명  
                     race_no = safe_int(item.get('rcNo'))    #경주 번호
-                    horse_id = safe_str(item.get('hrno'))   #마번
+                    horse_id = safe_str(item.get('hrno')) if item.get('hrno') else safe_str(item.get('hrNo'))  #마번
 
                     # 마스터 데이터 ID들과 이름들
                     jk_no = safe_str(item.get('jkNo'))
                     jockey_name = safe_str(item.get('jkName'))
-                    trainer_id = safe_str(item.get('prtr'))
-                    trainer_name = safe_str(item.get('prtrName'))
-                    owner_id = safe_str(item.get('prow'))
-                    owner_name = safe_str(item.get('prowName'))
-                    horse_name = safe_str(item.get('hrName'))
+                    trainer_id = safe_str(item.get('prtr')) if item.get('prtr') else safe_str(item.get('trNo'))
+                    trainer_name = safe_str(item.get('prtrName')) if item.get('prtrName') else safe_str(item.get('trName'))
+                    owner_id = safe_str(item.get('prow')) if item.get('prow') else safe_str(item.get('owNo'))
+                    owner_name = safe_str(item.get('prowName')) if item.get('prowName') else safe_str(item.get('owName'))
+                    horse_name = safe_str(item.get('hrName')) if item.get('hrName') else safe_str(item.get('trName'))
                     
                     if not all([race_date, meet_code, race_no, horse_id, jk_no, trainer_id, owner_id]):
                         continue                    
@@ -216,25 +246,25 @@ def parse_and_normalize_race_data(api_response):
                             'meet_code': meet_code,
                             'race_id': race_no,
                             'race_distance': safe_int(item.get('rcDist')),  #경주거리
-                            'race_grade': safe_str(item.get('rcGrade')),    #경주등급
-                            'race_age': safe_str(item.get('rcAge')),        #연령조건
-                            'race_sex': safe_str(item.get('rcSex')),        #성별조건
-                            'race_type': safe_str(item.get('rcCode')),      #대상경주명(일반, 특별, 오픈 등)
+                            'race_grade': safe_str(item.get('rcGrade')) if item.get('rcGrade') else safe_str(item.get('rcName')), #경주등급
+                            'race_age': safe_str(item.get('rcAge')) if item.get('rcAge') else safe_str(item.get('ageCond')), #연령조건
+                            'race_sex': safe_str(item.get('rcSex')) if item.get('rcSex') else safe_str(item.get('sexCond')), #성별조건
+                            'race_type': safe_str(item.get('rcCode')) if item.get('rcCode') else '', #대상경주명(일반, 특별, 오픈 등)
                             #'race_category': safe_str(item.get('rcRank')),
-                            'race_kind': safe_str(item.get('rankKind')),    #경주종류
-                            'race_flag': safe_str(item.get('rcFrflag')),    #경주구분(국산, 혼합, 외산 등)
-                            'night_race': safe_str(item.get('rcNrace')),    #야간경주 여부
-                            'track_condition': safe_str(item.get('track')), #경주로상태
-                            'weather': safe_str(item.get('weath')),         #날씨
-                            'total_horses': safe_int(item.get('rcVtdusu')), #총 출전마 수
-                            'planned_horses': safe_int(item.get('rcPlansu')),#계획 출전마 수
-                            'weight_type': safe_int(item.get('rcBudam')),   #부담구분(1:마령, 2:별정, 3:핸디캡)
-                            'race_status': safe_str(item.get('noracefl')),  #경주상태(정상/취소 등)
-                            'is_divided': safe_int(item.get('divide')),     #분할경주 여부
-                            'race_days': safe_int(item.get('rundayth')),    #경주일수 (말 출전한 총 일수)
+                            'race_kind': safe_str(item.get('rankKind')) if item.get('rankKind') else '',    #경주종류
+                            'race_flag': safe_str(item.get('rcFrflag')) if item.get('rcFrflag') else safe_str(item.get('name')),    #경주구분(국산, 혼합, 외산 등)
+                            'night_race': safe_str(item.get('rcNrace')) if item.get('rcNrace') else '일반',    #야간경주 여부
+                            'track_condition': safe_str(item.get('track')) if item.get('track') else '', #경주로상태
+                            'weather': safe_str(item.get('weath')) if item.get('weath') else safe_str(item.get('weather')),         #날씨
+                            'total_horses': safe_int(item.get('rcVtdusu'))  if item.get('rcVtdusu') else 11, #총 출전마 수
+                            'planned_horses': safe_int(item.get('rcPlansu')) if item.get('rcPlansu') else 11,#계획 출전마 수
+                            'weight_type': safe_int(item.get('rcBudam')) if item.get('rcBudam') else 2,   #부담구분(1:마령, 2:별정, 3:핸디캡)
+                            'race_status': safe_str(item.get('noracefl')) if item.get('noracefl') else '정상' ,  #경주상태(정상/취소 등)
+                            'is_divided': safe_int(item.get('divide')) if item.get('divide') else 0,     #분할경주 여부
+                            'race_days': safe_int(item.get('rundayth')) if item.get('rundayth') else 40,    #경주일수 (말 출전한 총 일수)
                             #'special_code_a': safe_str(item.get('rcSpcba')),
                             #'special_code_b': safe_str(item.get('rcSpcbu')),
-                            'estimated_odds': safe_float(item.get('rc10dusu')) # 예상배당률
+                            'estimated_odds': safe_float(item.get('rc10dusu')) if item.get('rc10dusu') else item.get('winOdds') # 예상배당률
                         })
                         processed_races.add(race_key)                   
 
@@ -277,9 +307,9 @@ def parse_and_normalize_race_data(api_response):
                         'jk_no': jk_no,
                         'trainer_id': trainer_id,
                         #'owner_id': owner_id,
-                        'entry_number': safe_int(item.get('rcChul')),   #출전번호
+                        'entry_number': safe_int(item.get('rcChul')) if item.get('rcChul') else safe_int(item.get('chulNo')),   #출전번호
                         'horse_weight': safe_int(item.get('wgHr')),     #마체중
-                        'final_rank': safe_int(item.get('rcOrd')),      #순위
+                        'final_rank': safe_int(item.get('rcOrd')) if item.get('rcOrd') else safe_int(item.get('ord')),      #순위
                         'finish_time': safe_float(item.get('rcTime')),  #경주시간(초단위)
                         #'diff_total': safe_float(item.get('diffTot')),  #1등과 시간차이 누적 
                         # 'diff_2nd': safe_float(item.get('rcDiff2')),
@@ -464,33 +494,71 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
     all_race_data = []
     empty_pages = 0
     
-    for page in range(start_page, start_page + max_pages):
-        try:
-            api_data, _ = fetch_race_data(page=page, start_date=start_date, end_date=end_date)
-            
-            if api_data:
-                parsed_data = parse_and_normalize_race_data(api_data)
-                race_entries = parsed_data.get('race_entries', [])
+    #제주 경주 결과 수집    
+    current = datetime.strptime(start_date, "%Y%m%d")
+    end = datetime.strptime(end_date, "%Y%m%d")
+    while current <= end:        
+        for page in range(start_page, start_page + max_pages):
+            try:
+                api_data, _ = fetch_race_data_jeju(page=page, end_date=current.strftime('%Y%m'))
                 
-                if race_entries:
-                    all_race_data.append(parsed_data)
-                    logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
-                    empty_pages = 0
+                if api_data:
+                    parsed_data = parse_and_normalize_race_data(api_data)
+                    race_entries = parsed_data.get('race_entries', [])
+                    
+                    if race_entries:
+                        all_race_data.append(parsed_data)
+                        logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
+                        empty_pages = 0
+                    else:
+                        empty_pages += 1
+                        logger.info(f"페이지 {page}: 데이터 없음")
                 else:
                     empty_pages += 1
-                    logger.info(f"페이지 {page}: 데이터 없음")
-            else:
-                empty_pages += 1
+                    
+                if empty_pages >= 5:
+                    logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
+                    break
+                    
+                time.sleep(0.2)
                 
-            if empty_pages >= 5:
-                logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
-                break
-                
-            time.sleep(0.2)
+            except Exception as e:
+                logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
+                continue
             
-        except Exception as e:
-            logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
-            continue
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1, day=1)
+        else:
+            current = current.replace(month=current.month + 1, day=1)
+  
+
+    # for page in range(start_page, start_page + max_pages):
+    #     try:
+    #         api_data, _ = fetch_race_data(page=page, start_date=start_date, end_date=end_date)
+            
+    #         if api_data:
+    #             parsed_data = parse_and_normalize_race_data(api_data)
+    #             race_entries = parsed_data.get('race_entries', [])
+                
+    #             if race_entries:
+    #                 all_race_data.append(parsed_data)
+    #                 logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
+    #                 empty_pages = 0
+    #             else:
+    #                 empty_pages += 1
+    #                 logger.info(f"페이지 {page}: 데이터 없음")
+    #         else:
+    #             empty_pages += 1
+                
+    #         if empty_pages >= 5:
+    #             logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
+    #             break
+                
+    #         time.sleep(0.2)
+            
+    #     except Exception as e:
+    #         logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
+    #         continue
     
     # 모든 데이터 통합
     if all_race_data:

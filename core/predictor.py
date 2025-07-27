@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from supabase import create_client, Client
 import warnings
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 # algorithm1.py
 
 from model_manager import ModelManager
@@ -203,9 +204,9 @@ class HorseRacing1stPlacePredictor:
             if batch_months == 1:
                 # 1개월씩
                 if current_date.month == 12:
-                    batch_end = current_date.replace(year=current_date.year + 1, month=1)
+                    batch_end = current_date + relativedelta(months=1)
                 else:
-                    batch_end = current_date.replace(month=current_date.month + 1)
+                    batch_end = current_date + relativedelta(months=batch_months)
             else:
                 # 지정된 개월 수만큼
                 batch_end = current_date + timedelta(days=batch_months * 30)
@@ -257,118 +258,19 @@ class HorseRacing1stPlacePredictor:
         단일 배치 데이터 추출 (단순화된 쿼리)
         """
         all_data = []
-        page_size = 500  # 페이지 크기 줄임
+        page_size = 50  # 페이지 크기 줄임
         offset = 0
         
         while True:
             # 단순화된 쿼리 - Window function 최소화
             query = f"""
-            WITH horse_stats AS (
-            -- 말별 과거 성적 통계
-                SELECT 
-                    horse_id,
-                    race_date,
-                    COUNT(*) OVER (
-                        PARTITION BY horse_id 
-                        ORDER BY race_date 
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                    ) as prev_total_races,
-                    AVG(final_rank) OVER (
-                        PARTITION BY horse_id 
-                        ORDER BY race_date 
-                        ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING
-                    ) as prev_5_avg_rank,
-                    AVG(final_rank) OVER (
-                        PARTITION BY horse_id 
-                        ORDER BY race_date 
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                    ) as prev_total_avg_rank,
-                    SUM(CASE WHEN final_rank = 1 THEN 1 ELSE 0 END) OVER (
-                        PARTITION BY horse_id 
-                        ORDER BY race_date 
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                    ) as prev_wins,
-                    SUM(CASE WHEN final_rank <= 3 THEN 1 ELSE 0 END) OVER (
-                        PARTITION BY horse_id 
-                        ORDER BY race_date 
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
-                    ) as prev_top3
-                FROM race_entries
-                WHERE race_date <= $1::date
-            ),
-            distance_stats AS (
-                -- 거리별 성적
-                SELECT 
-                    re.horse_id,
-                    r.race_distance,
-                    AVG(re.final_rank) as avg_rank_at_distance,
-                    COUNT(*) as races_at_distance
-                FROM race_entries re
-                JOIN races r ON re.race_id = r.race_id
-                WHERE re.race_date <= $2::date
-                GROUP BY re.horse_id, r.race_distance
-            )
-            select row_to_json(r) as result
+            SELECT row_to_json(r) as result
             FROM (
-                SELECT 
-                    re.race_id,
-                    re.horse_id,
-                    re.race_date,
-                    re.meet_code,
-                    re.entry_number,
-                    re.horse_weight,
-                    re.final_rank,
-                    CASE WHEN re.final_rank = 1 THEN 1 ELSE 0 END as is_winner,
-                    
-                    -- 말 정보
-                    h.age as horse_age,
-                    CASE WHEN h.gender = '수컷' THEN 1 ELSE 0 END as is_male,
-                    h.rank as horse_class,
-                    h.name as horse_name,
-                    
-                    -- 경주 정보
-                    r.race_distance,
-                    r.total_horses,
-                    r.planned_horses,
-                    r.race_grade,
-                    r.track_condition,
-                    r.weather,
-                    r.weight_type,
-                    
-                    -- 말 과거 성적
-                    hs.prev_total_races,
-                    hs.prev_5_avg_rank,
-                    hs.prev_total_avg_rank,
-                    hs.prev_wins,
-                    hs.prev_top3,
-                    
-                    -- 기수 정보
-                    j.total_races as jockey_total_races,
-                    j.total_wins as jockey_total_wins,
-                    j.year_races as jockey_year_races,
-                    j.year_wins as jockey_year_wins,
-                    
-                    -- 조교사 정보
-                    t.rc_cnt_t as trainer_total_races,
-                    t.ord1_cnt_t as trainer_total_wins,
-                    t.rc_cnt_y as trainer_year_races,
-                    t.ord1_cnt_y as trainer_year_wins,
-                    
-                    -- 거리별 성적
-                    ds.avg_rank_at_distance,
-                    ds.races_at_distance
-                            
-                FROM race_entries re
-                JOIN horses h ON re.horse_id = h.horse_id
-                JOIN races r ON re.race_id = r.race_id  and re.race_date = r.race_Date
-                LEFT JOIN horse_stats hs ON re.horse_id = hs.horse_id AND re.race_date = hs.race_date
-                LEFT JOIN jockeys j ON re.jk_no = j.jk_no
-                LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
-                LEFT JOIN distance_stats ds ON re.horse_id = ds.horse_id AND r.race_distance = ds.race_distance
-                WHERE re.race_date BETWEEN $3::date AND $4::date
-                AND re.final_rank IS NOT NULL
-                AND hs.prev_total_races >= 3  -- 최소 3경주 이상 출전한 말만
-                ORDER BY re.race_date, r.race_id, re.entry_number
+                SELECT *
+                FROM race_analysis_complete
+                WHERE race_date BETWEEN $1::date AND $2::date
+                AND prev_total_races >= 3  -- 최소 3경주 이상 출전한 말만
+                ORDER BY race_date, race_id, meet_code, entry_number
                 LIMIT {page_size} OFFSET {offset}
             ) r
             """
@@ -376,7 +278,7 @@ class HorseRacing1stPlacePredictor:
             try:
                 result = self.supabase.rpc('execute_sql', {
                     'sql_query': query, 
-                    'params': [end_date, end_date, start_date, end_date]
+                    'params': [start_date, end_date]
                 }).execute()
                 
                 if not result.data:
@@ -821,7 +723,7 @@ class HorseRacing1stPlacePredictor:
                                             
                     FROM race_entries re
                     JOIN horses h ON re.horse_id = h.horse_id
-                    JOIN races r ON re.race_id = r.race_id AND re.race_date = r.race_date
+                    JOIN races r ON re.race_id = r.race_id AND re.race_date = r.race_date and r.meet_code = re.meet_code
                     LEFT JOIN jockeys j ON re.jk_no = j.jk_no
                     LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
                     WHERE {where_clause}
@@ -842,10 +744,10 @@ class HorseRacing1stPlacePredictor:
             df = pd.DataFrame([row["result"] for row in result.data])
             
             # 중복 제거 (혹시 모를 중복 데이터)
-            df = df.drop_duplicates(subset=['race_id', 'horse_id', 'entry_number'])
+            df = df.drop_duplicates(subset=['race_id', 'race_date', 'meet_code', 'horse_id', 'entry_number'])
             
             print(f"📊 조회된 데이터: {len(df)}개 레코드")
-            print(f"📊 고유 경주 수: {df['race_id'].nunique()}개")
+            print(f"📊 고유 경주 수: {df[['race_date', 'meet_code', 'race_id']].drop_duplicates().shape[0]}개")
             print(f"📊 고유 말 수: {df['horse_id'].nunique()}개")
             
             # 각 말의 과거 데이터 계산
@@ -889,7 +791,7 @@ class HorseRacing1stPlacePredictor:
             ensemble_prob = np.mean(predictions, axis=0)
             
             # 결과 정리
-            result_df = df[['race_id', 'horse_id', 'horse_name', 'entry_number', 
+            result_df = df[['race_id', 'race_date', 'meet_code','horse_id', 'horse_name', 'entry_number', 
                         'horse_age', 'horse_class', 'is_male', 'final_rank']].copy()
             result_df['win_probability'] = ensemble_prob
             
@@ -900,17 +802,21 @@ class HorseRacing1stPlacePredictor:
                 return group
             
             result_df = result_df.groupby('race_id').apply(calculate_race_rank).reset_index(drop=True)
-            result_df = result_df.sort_values(['race_id', 'prediction_rank'])
+            result_df = result_df.sort_values(['meet_code','race_id','race_date', 'prediction_rank'])
 
             # 경주별 결과 출력 (수정된 부분)
             print("\n" + "="*60)
             print("🏆 예측 결과")
             print("="*60)
+
+            unique_races = result_df[['meet_code', 'race_id']].drop_duplicates().sort_values(['meet_code','race_id'])
             
-            for race_id in sorted(result_df['race_id'].unique()):
-                race_data = result_df[result_df['race_id'] == race_id].head(3)
+            for _, row in unique_races.iterrows():
+                race_id = row['race_id']
+                meet_code = row['meet_code']
+                race_data = result_df[(result_df['race_id'] == race_id) & (result_df['meet_code'] == meet_code)].head(3)
                 
-                print(f"\n🏁 경주 {race_id}번 - TOP 3 예측")
+                print(f"\n🏁 {meet_code} 경주 {race_id}번 - TOP 3 예측")
                 print("-" * 50)
                 
                 for idx, row in race_data.iterrows():
@@ -985,7 +891,7 @@ class HorseRacing1stPlacePredictor:
         
         return df
     
-    def backtest_strategy(self, start_date, end_date, confidence_threshold=0.7):
+    def backtest_strategy(self, start_date, end_date, confidence_threshold=0.3):
         """
         백테스팅 전략 - 1등 예측 모델을 사용하여 3등안에 드는지 테스트
         """
@@ -1002,6 +908,7 @@ class HorseRacing1stPlacePredictor:
         total_profit = 0
         top3_hits = 0    # 3등 안 적중
         wins = 0        # 1등 적중
+        budget = 100000 # 초기 에산 10만원
 
         detailed_results = [] # 상세결과 저장
         
@@ -1013,18 +920,27 @@ class HorseRacing1stPlacePredictor:
                     race['race_id']
                 )
                 
-                if isinstance(predictions, str):
+                if isinstance(predictions, str) or predictions is None:
                     continue
                 
                 # 가장 확신하는 말에 베팅
                 best_horse = predictions.iloc[3]
                 
                 # 상위 3마리 말 선택 (확률 높은 순)
-                top_picks = predictions.head(3)  # 상위 3마리
+                top_picks = predictions.head(1)  # 상위 3마리
             
                 for idx, horse in top_picks.iterrows():
                     if horse['win_probability'] > confidence_threshold:
                         total_bets += 1
+                        if horse['win_probability'] > 0.8:
+                            bet_price = 20000  # 확신이 높으면 2만원 베팅
+                        elif horse['win_probability'] >= 0.6:
+                            bet_price = 10000  # 베팅금 1만원
+                        else:
+                            bet_price = 3000
+
+                        budget -= bet_price  # 베팅금 1만원 차감
+
                         
                         # 실제 결과 확인
                         actual_result = self.supabase.table('race_entries')\
@@ -1058,16 +974,13 @@ class HorseRacing1stPlacePredictor:
                                 top3_hits += 1
                                 # 3등 기준 수익 계산 (예: 1등=3배, 2등=2배, 3등=1.5배)
                                 if actual_rank in [1, 2, 3]:
-                                    profit = 1000 
+                                    budget += bet_price*1.6 
                                     if actual_rank == 1:
                                         wins += 1
-                                total_profit += profit
-                            else:
-                                total_profit -= 1000  # 실패 시 베팅금 손실
                             
                             # 디버깅용 출력
                             status = "✅ TOP3" if actual_rank <= 3 else "❌ 실패"
-                            print(f"  {race['race_date']} R{race['race_id']} {horse_id}({horse['entry_number']}번): {horse['win_probability']:.3f} → {actual_rank}등 {status}")
+                            print(f" {race['race_date']} {race['meet_code']} R{race['race_id']} {horse_id}({horse['entry_number']}번): {horse['win_probability']:.3f} → {actual_rank}등 {status}")
                             
                         
             except Exception as e:
@@ -1084,7 +997,7 @@ class HorseRacing1stPlacePredictor:
             print(f"  총 베팅: {total_bets}회")
             print(f"  1등 적중: {wins}회 ({win_rate:.1%})")
             print(f"  3등 안 적중: {top3_hits}회 ({top3_hit_rate:.1%})")
-            print(f"  총 수익: {total_profit:,}원")
+            print(f"  남은 예산: {budget}원")
             print(f"  ROI: {roi:.1f}%")
             
             # 확률별 성과 분석
