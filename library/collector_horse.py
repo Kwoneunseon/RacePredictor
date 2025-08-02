@@ -7,6 +7,7 @@ import logging
 from supabase import create_client, Client
 
 from _const import API_KEY, SUPABASE_URL, SUPABASE_KEY  # config 파일 수정 필요
+from Utils import safe_int, safe_float
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -91,6 +92,110 @@ def parse_horse_data(api_response):
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
         
     return horses_data
+
+
+def fetch_additional_horse_data(horse_id:str):
+    '''
+    경주마 성적 API에서 추가적인 데이터 가져오는 함수 (최적화 버전)
+    '''
+    params = {
+        "serviceKey": API_KEY,
+        "hr_no": horse_id, 
+        "_type": 'json',
+        }
+
+    try:
+        endpoint = "https://apis.data.go.kr/B551015/API15_2/raceHorseResult_2"
+        response = requests.get(endpoint, params=params, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            logger.error(f"API 호출 실패 - 페이지 {horse_id}: {response.status_code}")
+            return None
+
+    except Exception as e:
+        logger.error(f"API 호출 중 오류 발생 - 말 ID {horse_id} {str(e)}")
+        return None
+    
+    
+def parse_additional_horse_data(api_response):
+    """
+    API 응답을 파싱하여 테이블 구조에 맞는 데이터로 변환 (추가적인 정보)
+    """
+    additional_data = {
+        'recent_burden_weight': '',
+        'recent_race_rating': 0,
+        'recent_horse_weight':0,
+        'total_races' : 0,
+        'total_wins': 0,
+        'total_places': 0,
+        'total_win_rate': 0.0,
+        'total_place_rate': 0.0,
+        'year_races': 0,
+        'year_wins': 0,
+        'year_win_rate': 0.0,
+        'year_place_rate': 0.0
+    }
+    
+    
+    try:
+        if 'response' in api_response and 'body' in api_response['response']:
+            items = api_response['response']['body']
+            if items:
+                items = items.get('items', [])
+            if items:
+                items = items.get('item', [])
+                
+                if isinstance(items, dict):
+                    items = [items]
+                    
+                for item in items:
+                    additional_data['recent_burden_weight'] = item.get('recentBudam', '')
+                    additional_data['recent_race_rating'] = safe_int(item.get('recentRating', 0))
+                    additional_data['recent_horse_weight'] = safe_int(item.get('recentWgHr', 0))
+
+                    additional_data['total_races'] = safe_int(item.get('rcCnt', 0))
+                    additional_data['total_wins'] = safe_int(item.get('ord1CntT', 0))
+                    additional_data['total_places'] = safe_int(item.get('ord2CntT', 0))
+                    additional_data['total_win_rate'] = safe_float(item.get('winRateT', 0.0))
+                    additional_data['total_place_rate'] = safe_float(item.get('qnlRateT', 0.0))
+
+                    additional_data['year_races'] = safe_int(item.get('rcCntY', 0))
+                    additional_data['year_wins'] = safe_int(item.get('ord1CntY', 0))
+                    additional_data['year_win_rate'] = safe_float(item.get('winRateY', 0.0))
+                    additional_data['year_place_rate'] = safe_float(item.get('qnlRateY', 0.0))
+
+    except Exception as e:
+        logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
+        
+    return additional_data
+
+def combine_horse_data_with_details(horse_basic_data):
+    '''기본 말 정보에 추가 정보들을 조합하는 함수'''
+    combined_data = []
+    
+    for horse in horse_basic_data:
+        horse_id = horse['horse_id']
+        logger.info(f"말 {horse_id}의 추가 정보 수집 중...")
+        
+        # 기본 정보로 시작
+        combined_horse = horse.copy()
+        
+        # 경주 기록 정보 추가
+        additional_data = fetch_additional_horse_data(horse_id)
+        if additional_data:
+            horse_additional_info = parse_additional_horse_data(additional_data)
+            combined_horse.update(horse_additional_info)
+                
+        combined_data.append(combined_horse)
+
+        # API 호출 제한 방지
+        time.sleep(0.2)
+    
+    return combined_data
+
 
 def save_to_supabase_batch(horses_data, batch_size=500):
     """
@@ -327,7 +432,22 @@ def fetch_single_horse_data(horse_id):
     """
     특정 말 ID로 말 정보 API 호출 (fetch_horse_data 래퍼)
     """
-    return fetch_horse_data(page=1, per_page=1, options={"hr_no": horse_id})
+
+    api_data, _ = fetch_horse_data(page=1, per_page=1, options={"hr_no": horse_id})
+    horse_data = parse_horse_data(api_data)
+
+    if not horse_data:
+        logger.warning(f"말 ID {horse_id}에 대한 데이터가 없습니다.")
+        return None
+    
+    horse_data = horse_data[0]  # 단일 말 정보이므로 첫 번째 요소만 사용
+
+    additional_data = fetch_additional_horse_data(horse_id)
+    if additional_data:
+        horse_additional_info = parse_additional_horse_data(additional_data)
+        horse_data.update(horse_additional_info)  
+
+    return horse_data
 
 def update_single_horse(horse_id):
     """

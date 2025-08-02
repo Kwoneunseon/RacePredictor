@@ -56,12 +56,13 @@ def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
         logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
         return None, page
     
-def fetch_race_data_jeju(page=1, per_page=1000 ,start_date=None, end_date=None):
+def fetch_race_data_jeju(page=1, per_page=1000 ,meet_code = 2, start_date=None, end_date=None):
     """제주 부경 경주 결과 API에서 데이터 가져오는 함수"""
     params = {
         "serviceKey": API_KEY,
         "pageNo": page,
         "numOfRows": per_page,
+        "meet": meet_code,
         "rc_month": end_date[:6],  # 종료일
         "_type": 'json'
 
@@ -89,29 +90,59 @@ def fetch_race_data_jeju(page=1, per_page=1000 ,start_date=None, end_date=None):
 def get_existing_master_data():
     """기존 마스터 데이터 개수 확인"""
     try:
-        # 기존 데이터들을 메모리에 캐시
-        horses = supabase.table('horses').select('horse_id').execute()
-        jockeys = supabase.table('jockeys').select('jk_no').execute()
-        trainers = supabase.table('trainers').select('trainer_id').execute()
-        owners = supabase.table('owners').select('owner_id').execute()
-        
         existing_data = {
-            'horses': set(item['horse_id'] for item in horses.data) if horses.data else set(),
-            'jockeys': set(item['jk_no'] for item in jockeys.data) if jockeys.data else set(),
-            'trainers': set(item['trainer_id'] for item in trainers.data) if trainers.data else set(),
-            'owners': set(item['owner_id'] for item in owners.data) if owners.data else set()
+            'horses': set(),
+            'jockeys': set(),
+            'trainers': set(),
+            'owners': set()
         }
         
-        logger.info(f"기존 마스터 데이터 캐시: 말 {len(existing_data['horses'])}마리, "
-                   f"기수 {len(existing_data['jockeys'])}명, "
-                   f"조교사 {len(existing_data['trainers'])}명, "
-                   f"마주 {len(existing_data['owners'])}명")
+        # 테이블별 설정
+        table_configs = [
+            ('horses', 'horse_id', 'horses'),
+            ('jockeys', 'jk_no', 'jockeys'),
+            ('trainers', 'trainer_id', 'trainers'),
+            ('owners', 'owner_id', 'owners')
+        ]
+        
+        for table_name, id_column, key in table_configs:
+            page_size = 1000
+            start = 0
+            
+            while True:
+                try:
+                    response = supabase.table(table_name)\
+                        .select(id_column)\
+                        .range(start, start + page_size - 1)\
+                        .execute()
+                    
+                    if not response.data:
+                        break
+                    
+                    # 세트에 추가
+                    for item in response.data:
+                        existing_data[key].add(item[id_column])
+                    
+                    logger.info(f"{table_name}: {len(response.data)}개 로드됨 (누적: {len(existing_data[key])}개)")
+                    
+                    if len(response.data) < page_size:
+                        break
+                        
+                    start += page_size
+                    
+                except Exception as e:
+                    logger.error(f"{table_name} 페이지 {start//page_size + 1} 로드 실패: {str(e)}")
+                    break
+        
+        total_loaded = sum(len(data) for data in existing_data.values())
+        logger.info(f"총 {total_loaded}개 마스터 데이터 로드 완료")
         
         return existing_data
         
     except Exception as e:
         logger.error(f"마스터 데이터 캐시 생성 실패: {str(e)}")
         return {'horses': set(), 'jockeys': set(), 'trainers': set(), 'owners': set()}
+
 
 def save_missing_master_data(missing_data):
     """누락된 마스터 데이터 저장"""
@@ -124,10 +155,9 @@ def save_missing_master_data(missing_data):
             logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
             for batch_start in range(0, len(missing_data['horses'])):
                 horse_id = missing_data['horses'][batch_start]['horse_id']
-                api_data, _ = horse_fetch_page(horse_id)
-                horse_data = parse_horse_data(api_data)
+                horse_data = horse_fetch_page(horse_id)
                 if horse_data:
-                    horse_datas.append(horse_data[0])
+                    horse_datas.append(horse_data)
             save_horse_data(horse_datas)
             saved_counts['horses'] = len(missing_data['horses'])
         else:
@@ -330,11 +360,11 @@ def parse_and_normalize_race_data(api_response):
     }
 
 def filter_duplicates_in_race_and_entries(races, race_entries):
-    """race, race_entries 리스트 내 중복 제거 (race_date + race_id, entry_key 기준)"""
+    """race, race_entries 리스트 내 중복 제거 (race_date + race_id + meet_code, entry_key 기준)"""
     filtered_races = []
     seen_race_keys = set()
     for race in races:
-        race_key = (race.get('race_date'), race.get('race_id'))  # race_date + race_id 조합
+        race_key = (race.get('race_date'), race.get('race_id'), race.get('meet_code'))  # race_date + race_id + meet_code 조합
         if race_key not in seen_race_keys:
             filtered_races.append(race)
             seen_race_keys.add(race_key)
@@ -343,7 +373,8 @@ def filter_duplicates_in_race_and_entries(races, race_entries):
     seen_entry_keys = set()
     for entry in race_entries:
         entry_key = (
-            entry.get('race_date'),  # race_date 추가
+            entry.get('meet_code'),
+            entry.get('race_date'),  
             entry.get('race_id'),
             entry.get('horse_id')
         )
@@ -494,71 +525,80 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
     all_race_data = []
     empty_pages = 0
     
-    #제주 경주 결과 수집    
-    current = datetime.strptime(start_date, "%Y%m%d")
-    end = datetime.strptime(end_date, "%Y%m%d")
-    while current <= end:        
-        for page in range(start_page, start_page + max_pages):
-            try:
-                api_data, _ = fetch_race_data_jeju(page=page, end_date=current.strftime('%Y%m'))
-                
-                if api_data:
-                    parsed_data = parse_and_normalize_race_data(api_data)
-                    race_entries = parsed_data.get('race_entries', [])
-                    
-                    if race_entries:
-                        all_race_data.append(parsed_data)
-                        logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
-                        empty_pages = 0
+    #제주, 부산 경주 결과 수집    
+    meet_codes = [2,3]
+    for meet_code in meet_codes:
+        if meet_code == 2:
+            print("제주 경주 결과 수집 시작")
+        elif meet_code == 3:
+            print("부산 경주 결과 수집 시작")
+        
+        current = datetime.strptime(start_date, "%Y%m%d")
+        end = datetime.strptime(end_date, "%Y%m%d")
+
+        while current <= end:        
+            for page in range(start_page, start_page + max_pages):
+                try:
+                    #api_data, _ = fetch_race_data_jeju(page=page, meet_code=meet_code, end_date=current.strftime('%Y%m'))
+                    api_data = None
+                    if api_data:
+                        parsed_data = parse_and_normalize_race_data(api_data)
+                        race_entries = parsed_data.get('race_entries', [])
+                        
+                        if race_entries:
+                            all_race_data.append(parsed_data)
+                            logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
+                            empty_pages = 0
+                        else:
+                            empty_pages += 1
+                            logger.info(f"페이지 {page}: 데이터 없음")
                     else:
                         empty_pages += 1
-                        logger.info(f"페이지 {page}: 데이터 없음")
+                        
+                    if empty_pages >= 5:
+                        logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
+                        break
+                        
+                    time.sleep(0.2)
+                    
+                except Exception as e:
+                    logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
+                    continue
+                
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1, day=1)
+            else:
+                current = current.replace(month=current.month + 1, day=1)
+  
+    #서울 경주 결과 수집
+    for page in range(start_page, start_page + max_pages):
+        try:
+            api_data, _ = fetch_race_data(page=page, start_date=start_date, end_date=end_date)
+            
+            if api_data:
+                parsed_data = parse_and_normalize_race_data(api_data)
+                race_entries = parsed_data.get('race_entries', [])
+                
+                if race_entries:
+                    all_race_data.append(parsed_data)
+                    logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
+                    empty_pages = 0
                 else:
                     empty_pages += 1
-                    
-                if empty_pages >= 5:
-                    logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
-                    break
-                    
-                time.sleep(0.2)
+                    logger.info(f"페이지 {page}: 데이터 없음")
+            else:
+                empty_pages += 1
                 
-            except Exception as e:
-                logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
-                continue
+            if empty_pages >= 5:
+                logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
+                break
+                
+            time.sleep(0.2)
             
-        if current.month == 12:
-            current = current.replace(year=current.year + 1, month=1, day=1)
-        else:
-            current = current.replace(month=current.month + 1, day=1)
-  
+        except Exception as e:
+            logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
+            continue
 
-    # for page in range(start_page, start_page + max_pages):
-    #     try:
-    #         api_data, _ = fetch_race_data(page=page, start_date=start_date, end_date=end_date)
-            
-    #         if api_data:
-    #             parsed_data = parse_and_normalize_race_data(api_data)
-    #             race_entries = parsed_data.get('race_entries', [])
-                
-    #             if race_entries:
-    #                 all_race_data.append(parsed_data)
-    #                 logger.info(f"페이지 {page}: {len(race_entries)}개 경주 기록 수집")
-    #                 empty_pages = 0
-    #             else:
-    #                 empty_pages += 1
-    #                 logger.info(f"페이지 {page}: 데이터 없음")
-    #         else:
-    #             empty_pages += 1
-                
-    #         if empty_pages >= 5:
-    #             logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
-    #             break
-                
-    #         time.sleep(0.2)
-            
-    #     except Exception as e:
-    #         logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
-    #         continue
     
     # 모든 데이터 통합
     if all_race_data:
@@ -591,9 +631,14 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
     logger.info("정규화된 경주 결과 수집을 시작합니다...")
     logger.info(f"시작 페이지: {start_page}, 최대 페이지: {max_pages}")
     
-    # 기존 마스터 데이터 캐시 생성
-    existing_master_data = get_existing_master_data()
-    
+    # 기존 마스터 데이터 캐시 생성 qqq
+    #existing_master_data = get_existing_master_data()
+    existing_master_data = {
+            'horses': set(),
+            'jockeys': set(),
+            'trainers': set(),
+            'owners': set()
+        }
     start_time = time.time()
     
     # 데이터 수집
@@ -659,7 +704,7 @@ def check_data_quality():
 # 실행 예시
 if __name__ == "__main__":
     # 경주 결과 수집
-    collecting_race_results_normalized(start_page=1, max_pages=10)
+    #collecting_race_results_normalized(start_page=1, max_pages=10)
     
     # 데이터 품질 확인
     check_data_quality()

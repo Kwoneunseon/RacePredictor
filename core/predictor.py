@@ -9,6 +9,7 @@ from supabase import create_client, Client
 import warnings
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
+#import xgboost as xgb  # Added import for xgb
 # algorithm1.py
 
 from model_manager import ModelManager
@@ -645,29 +646,40 @@ class HorseRacing1stPlacePredictor:
             'ensemble_accuracy': ensemble_accuracy,
             'ensemble_auc': ensemble_auc,
             'feature_importance': feature_importance
-        }
+        }    
 
-    def get_loaded_model(self, model_name:str = 'horse_racing_model'):
+    def get_loaded_model(self, model_name: str = 'horse_racing_model'):
         """
-        저장된 모델 불러오기
+        저장된 모델 불러오기 (개선된 버전)
         """
-        model_data = self.model_manager.load_model(model_name)
+        print("=" * 50)
+        print("🔄 모델 로드 시도")
+        print("=" * 50)
+        
+        model_data = self.model_manager.load_model_safe(model_name)
         
         if not model_data:
             print(f"❌ 모델 '{model_name}'을(를) 찾을 수 없습니다.")
+            print("\n💡 해결 방법:")
+            print("1. 사용 가능한 모델 목록 확인:")
+            print("   predictor.model_manager.list_saved_models()")
+            print("2. 새로운 모델 훈련:")
+            print("   predictor.precision_boost_training(df)")
             return False
         
+        # 모델 데이터 적용
         self.models = model_data['models']
         self.scaler = model_data['scaler']
         self.label_encoders = model_data['label_encoders']
         self.feature_columns = model_data['feature_columns']
+        self.best_threshold = model_data.get('best_threshold', 0.5)
         
-        print(f"✅ 모델 '{model_name}'이(가) 성공적으로 불러와졌습니다.")
+        print(f"✅ 모델 '{model_name}' 로드 성공!")
         return True
     
-    def predict_race_winners(self, race_date, meet_code=None, race_no=None):
+    def predict_race_winners(self, race_date, meet_code=None, race_no=None, show=True):
         """
-        특정 경주의 1등 예측 (수정된 버전)
+        특정 경주의 1등 예측 (경마 특화 특성 생성 포함)
         """
         print(f"🔮 {race_date} 경주 예측 중...")       
 
@@ -750,8 +762,19 @@ class HorseRacing1stPlacePredictor:
             print(f"📊 고유 경주 수: {df[['race_date', 'meet_code', 'race_id']].drop_duplicates().shape[0]}개")
             print(f"📊 고유 말 수: {df['horse_id'].nunique()}개")
             
-            # 각 말의 과거 데이터 계산
+            # 🔧 각 말의 과거 데이터 계산
             df = self._calculate_prediction_features(df, race_date)
+            
+            # 🎯 핵심 수정: 경마 특화 특성 생성 추가!
+            print("🏇 예측용 경마 특화 특성 생성 중...")
+            try:
+                df = self.create_racing_specific_features(df)
+                print("✅ 경마 특화 특성 생성 완료")
+            except Exception as e:
+                print(f"⚠️ 경마 특화 특성 생성 실패: {e}")
+                print("기본 특성만으로 예측을 진행합니다.")
+            
+            # 데이터 전처리
             df = self._preprocess_data(df, is_training=False)
             
             # 모델이 학습되지 않았다면 에러
@@ -762,8 +785,14 @@ class HorseRacing1stPlacePredictor:
             # 필요한 특성이 있는지 확인
             missing_features = [col for col in self.feature_columns if col not in df.columns]
             if missing_features:
-                print(f"❌ 누락된 특성: {missing_features}")
-                return None
+                print(f"⚠️ 누락된 특성: {missing_features}")
+                print("🔧 누락된 특성을 0으로 채워서 진행합니다...")
+                
+                # 누락된 특성을 0으로 채우기
+                for feature in missing_features:
+                    df[feature] = 0
+                
+                print("✅ 누락 특성 처리 완료")
             
             # 예측 수행
             predictions = []
@@ -772,7 +801,7 @@ class HorseRacing1stPlacePredictor:
                 model = result['model']
                 
                 try:
-                    if name == 'LogisticRegression':
+                    if name == 'LogisticRegression' or 'LR' in name:
                         X_scaled = self.scaler.transform(df[self.feature_columns])
                         prob = model.predict_proba(X_scaled)[:, 1]
                     else:
@@ -795,42 +824,62 @@ class HorseRacing1stPlacePredictor:
                         'horse_age', 'horse_class', 'is_male', 'final_rank']].copy()
             result_df['win_probability'] = ensemble_prob
             
-            # 경주별로 예측 등수 계산 (수정된 부분)
+            # 경주별로 예측 등수 계산
             def calculate_race_rank(group):
                 group = group.copy()
                 group['prediction_rank'] = group['win_probability'].rank(ascending=False, method='min').astype(int)
                 return group
             
-            result_df = result_df.groupby('race_id').apply(calculate_race_rank).reset_index(drop=True)
+            result_df = result_df.groupby(['race_id', 'meet_code']).apply(calculate_race_rank).reset_index(drop=True)
             result_df = result_df.sort_values(['meet_code','race_id','race_date', 'prediction_rank'])
 
-            # 경주별 결과 출력 (수정된 부분)
-            print("\n" + "="*60)
-            print("🏆 예측 결과")
-            print("="*60)
+            # 🎯 정밀도 중심 추천 (임계값 적용)
+            threshold = getattr(self, 'best_threshold', 0.5)
+            result_df['high_confidence'] = (result_df['win_probability'] > threshold).astype(int)
+            result_df['recommendation'] = result_df['high_confidence'].map({
+                1: '🎯 강력 추천',
+                0: '⚠️ 보류'
+            })
 
-            unique_races = result_df[['meet_code', 'race_id']].drop_duplicates().sort_values(['meet_code','race_id'])
-            
-            for _, row in unique_races.iterrows():
-                race_id = row['race_id']
-                meet_code = row['meet_code']
-                race_data = result_df[(result_df['race_id'] == race_id) & (result_df['meet_code'] == meet_code)].head(3)
+            if show:
+                # 경주별 결과 출력
+                print("\n" + "="*60)
+                print("🏆 예측 결과")
+                print("="*60)
+
+                unique_races = result_df[['meet_code', 'race_id']].drop_duplicates().sort_values(['meet_code','race_id'])
                 
-                print(f"\n🏁 {meet_code} 경주 {race_id}번 - TOP 3 예측")
-                print("-" * 50)
-                
-                for idx, row in race_data.iterrows():
-                    gender = '수컷' if row['is_male'] == 1 else '암컷'
-                    actual_rank = f" (실제: {int(row['final_rank'])}등)" if pd.notna(row['final_rank']) else ""
+                for _, row in unique_races.iterrows():
+                    race_id = row['race_id']
+                    meet_code = row['meet_code']
+                    race_data = result_df[(result_df['race_id'] == race_id) & (result_df['meet_code'] == meet_code)].head(3)
                     
-                    print(f"  {int(row['prediction_rank'])}등 | "
-                        f"#{int(row['entry_number'])}번 | "
-                        f"{row['horse_name']} | "
-                        f"ID:{row['horse_id']} | "
-                        f"{int(row['horse_age'])}세 {gender} | "
-                        f"등급:{row['horse_class']} | "
-                        f"확률:{row['win_probability']:.3f}"
-                        f"{actual_rank}")
+                    print(f"\n🏁 {meet_code} 경주 {race_id}번 - TOP 5 예측")
+                    print("-" * 50)
+                    
+                    for idx, row in race_data.iterrows():
+                        gender = '수컷' if row['is_male'] == 1 else '암컷'
+                        actual_rank = f" (실제: {int(row['final_rank'])}등)" if pd.notna(row['final_rank']) else ""
+                        confidence_icon = "🎯" if row['high_confidence'] == 1 else "⚠️"
+                        
+                        print(f"  {confidence_icon} {int(row['prediction_rank'])}등 | "
+                            f"#{int(row['entry_number'])}번 | "
+                            f"{row['horse_name']} | "
+                            f"{int(row['horse_age'])}세 {gender} | "
+                            f"등급:{row['horse_class']} | "
+                            f"확률:{row['win_probability']:.3f} | "
+                            f"{row['recommendation']}"
+                            f"{actual_rank}")
+
+                # 강력 추천 요약
+                high_conf = result_df[result_df['high_confidence'] == 1]
+                print(f"\n🎯 정밀도 중심 추천 요약 (임계값: {threshold:.3f}):")
+                if len(high_conf) > 0:
+                    print(f"강력 추천: {len(high_conf)}마리")
+                    for _, horse in high_conf.iterrows():
+                        print(f"  🏆 {horse['horse_name']} (#{horse['entry_number']}번, 확률: {horse['win_probability']:.3f})")
+                else:
+                    print("⚠️ 이번 경주는 확신할 만한 말이 없습니다.")
 
             return result_df
             
@@ -866,28 +915,105 @@ class HorseRacing1stPlacePredictor:
     
     def _calculate_prediction_features(self, df, current_date):
         """예측용 특성 계산"""
-        # 각 말의 과거 성적을 current_date 이전 데이터로 계산
-        # 실제 구현에서는 별도 쿼리로 과거 데이터를 가져와야 함
+        print("📊 각 말의 과거 성적 계산 중...")
+        
+        # 기본값으로 초기화
+        df['prev_total_races'] = 0
+        df['prev_5_avg_rank'] = 6.0
+        df['prev_total_avg_rank'] = 6.0
+        df['prev_wins'] = 0
+        df['prev_top3'] = 0
+        df['avg_rank_at_distance'] = 6.0
+        df['races_at_distance'] = 0
+        
+        processed_count = 0
         
         for horse_id in df['horse_id'].unique():
-            # 과거 성적 조회 쿼리
-            past_races = self.supabase.table('race_entries')\
-                .select('final_rank')\
-                .eq('horse_id', horse_id)\
-                .lt('race_date', current_date)\
-                .order('race_date', desc=True)\
-                .execute()
-            
-            if past_races.data:
-                ranks = [r['final_rank'] for r in past_races.data]
+            try:
+                # 과거 성적 조회 쿼리 (현재 날짜 이전)
+                past_races = self.supabase.table('race_entries')\
+                    .select('final_rank, race_date')\
+                    .eq('horse_id', horse_id)\
+                    .lt('race_date', current_date)\
+                    .not_.is_('final_rank', 'null')\
+                    .order('race_date', desc=True)\
+                    .execute()
                 
-                # 특성 계산
-                mask = df['horse_id'] == horse_id
-                df.loc[mask, 'prev_total_races'] = len(ranks)
-                df.loc[mask, 'prev_5_avg_rank'] = np.mean(ranks[:5]) if ranks else 6
-                df.loc[mask, 'prev_total_avg_rank'] = np.mean(ranks) if ranks else 6
-                df.loc[mask, 'prev_wins'] = sum(1 for r in ranks if r == 1)
-                df.loc[mask, 'prev_top3'] = sum(1 for r in ranks if r <= 3)
+                if past_races.data and len(past_races.data) > 0:
+                    ranks = [r['final_rank'] for r in past_races.data if r['final_rank'] is not None]
+                    
+                    if ranks:  # 유효한 순위 데이터가 있을 때만
+                        # 특성 계산
+                        mask = df['horse_id'] == horse_id
+                        df.loc[mask, 'prev_total_races'] = len(ranks)
+                        df.loc[mask, 'prev_5_avg_rank'] = np.mean(ranks[:5]) if len(ranks) >= 1 else 6.0
+                        df.loc[mask, 'prev_total_avg_rank'] = np.mean(ranks) if ranks else 6.0
+                        df.loc[mask, 'prev_wins'] = sum(1 for r in ranks if r == 1)
+                        df.loc[mask, 'prev_top3'] = sum(1 for r in ranks if r <= 3)
+                        
+                        processed_count += 1
+                
+                # 거리별 성적 계산 (안전한 방식 - JOIN 없이)
+                race_distance = df[df['horse_id'] == horse_id]['race_distance'].iloc[0] if len(df[df['horse_id'] == horse_id]) > 0 else None
+                
+                if race_distance:
+                    try:
+                        # 1단계: 해당 말의 모든 과거 경주 ID 가져오기
+                        past_race_entries = self.supabase.table('race_entries')\
+                            .select('race_id, race_date, meet_code, final_rank')\
+                            .eq('horse_id', horse_id)\
+                            .lt('race_date', current_date)\
+                            .not_.is_('final_rank', 'null')\
+                            .execute()
+                        
+                        if past_race_entries.data:
+                            same_distance_ranks = []
+                            
+                            # 2단계: 각 경주의 거리 정보 개별 조회
+                            for entry in past_race_entries.data[:10]:  # 최근 10경주만 확인 (성능 향상)
+                                try:
+                                    race_info = self.supabase.table('races')\
+                                        .select('race_distance')\
+                                        .eq('race_id', entry['race_id'])\
+                                        .eq('race_date', entry['race_date'])\
+                                        .eq('meet_code', entry['meet_code'])\
+                                        .execute()
+                                    
+                                    if (race_info.data and 
+                                        race_info.data[0]['race_distance'] == race_distance):
+                                        same_distance_ranks.append(entry['final_rank'])
+                                        
+                                except Exception as e:
+                                    continue  # 개별 쿼리 실패는 건너뛰기
+                            
+                            # 결과 적용
+                            if same_distance_ranks:
+                                mask = df['horse_id'] == horse_id
+                                df.loc[mask, 'avg_rank_at_distance'] = np.mean(same_distance_ranks)
+                                df.loc[mask, 'races_at_distance'] = len(same_distance_ranks)
+                                
+                    except Exception as distance_error:
+                        # 거리별 성적 계산 실패 시 기본값 유지
+                        print(f"⚠️ 거리별 성적 계산 실패 (말 {horse_id}): {distance_error}")
+                        pass
+                            
+            except Exception as e:
+                print(f"⚠️ 말 {horse_id} 과거 성적 계산 실패: {e}")
+                continue
+        
+        print(f"✅ {processed_count}/{df['horse_id'].nunique()}마리 과거 성적 계산 완료")
+        
+        # 추가 기본 특성 생성
+        df['jockey_win_rate'] = df['jockey_total_wins'] / (df['jockey_total_races'] + 1)
+        df['trainer_win_rate'] = df['trainer_total_wins'] / (df['trainer_total_races'] + 1)
+        df['horse_win_rate'] = df['prev_wins'] / (df['prev_total_races'] + 1)
+        df['horse_top3_rate'] = df['prev_top3'] / (df['prev_total_races'] + 1)
+        df['experience_score'] = np.log1p(df['prev_total_races'])
+        df['recent_form'] = 6 - df['prev_5_avg_rank']
+        
+        # 인기도 점수 (임시로 entry_number로 대체)
+        if 'popularity_score' not in df.columns:
+            df['popularity_score'] = 1.0 / (df['entry_number'] + 1)
         
         return df
     
@@ -917,7 +1043,7 @@ class HorseRacing1stPlacePredictor:
                 predictions = self.predict_race_winners(
                     race['race_date'], 
                     race['meet_code'], 
-                    race['race_id']
+                    race['race_id'], show=False
                 )
                 
                 if isinstance(predictions, str) or predictions is None:
@@ -932,14 +1058,16 @@ class HorseRacing1stPlacePredictor:
                 for idx, horse in top_picks.iterrows():
                     if horse['win_probability'] > confidence_threshold:
                         total_bets += 1
-                        if horse['win_probability'] > 0.8:
-                            bet_price = 20000  # 확신이 높으면 2만원 베팅
-                        elif horse['win_probability'] >= 0.6:
-                            bet_price = 10000  # 베팅금 1만원
+                        if horse['win_probability'] > 0.9:
+                            bet_price = 10000
+                        elif horse['win_probability'] > 0.8:
+                            bet_price = 5000  
+                        elif horse['win_probability'] > 0.7:
+                            bet_price = 2000  
                         else:
-                            bet_price = 3000
+                            bet_price = 1000
 
-                        budget -= bet_price  # 베팅금 1만원 차감
+                        budget -= bet_price  # 베팅금 차감
 
                         
                         # 실제 결과 확인
@@ -1059,7 +1187,7 @@ class HorseRacing1stPlacePredictor:
                 prob = model.predict_proba(X_test)[:, 1]
             
             # 다양한 임계값으로 3등 예측 성능 평가
-            thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+            thresholds =  [0.6, 0.7, 0.8, 0.9]
             
             print(f"\n🔥 {name} 모델:")
             for threshold in thresholds:
@@ -1074,3 +1202,444 @@ class HorseRacing1stPlacePredictor:
                 print(f"  임계값 {threshold}: 정밀도={top3_precision:.3f}, 재현율={top3_recall:.3f}, F1={top3_f1:.3f}")
         
         return test_df
+    
+
+    # 기존 코드에 추가할 통합 솔루션
+    def precision_boost_training(self, df, test_size=0.2, model_name='precision_boosted_model'):
+        """
+        정밀도 극대화를 위한 통합 솔루션 (NaN 값 처리 개선)
+        """
+        print("🚀 정밀도 극대화 모델 훈련 시작!")
+        
+        # 1. 경마 특화 특성 생성
+        print("\n1️⃣ 경마 특화 특성 생성...")
+        df = self.create_racing_specific_features(df)
+        
+        # 2. 업데이트된 특성 목록
+        feature_cols = [
+            # 기본 특성
+            'horse_age', 'is_male', 'horse_class', 'race_distance', 'total_horses',
+            'horse_weight', 'race_grade', 'track_condition', 'weather',
+            'prev_total_races', 'prev_5_avg_rank', 'prev_total_avg_rank',
+            'jockey_win_rate', 'trainer_win_rate', 'horse_win_rate', 'horse_top3_rate',
+            'experience_score', 'recent_form',
+            
+            # 🎯 새로운 핵심 특성들
+            'championship_probability',  # 가장 중요!
+            'dominance_score',
+            'consistency_score', 
+            'distance_fitness',
+            'jockey_horse_synergy',
+            'momentum',
+            'championship_rank',
+            'is_clear_favorite',
+            'relative_win_rate'
+        ]
+        
+        # 실제 존재하는 컬럼만 선택
+        feature_cols = [col for col in feature_cols if col in df.columns]
+        self.feature_columns = feature_cols
+        
+        print(f"📋 총 특성 수: {len(feature_cols)}개")
+        
+        # 3. 데이터 분할
+        df_sorted = df.sort_values('race_date')
+        split_idx = int(len(df_sorted) * (1 - test_size))
+        
+        X_train = df_sorted.iloc[:split_idx][feature_cols]
+        X_test = df_sorted.iloc[split_idx:][feature_cols]
+        y_train = df_sorted.iloc[:split_idx]['is_winner']
+        y_test = df_sorted.iloc[split_idx:]['is_winner']
+        
+        print(f"\n📊 분할 전 데이터 상태:")
+        print(f"  훈련 세트: 1등 {y_train.sum()}개 / 전체 {len(y_train)}개 ({y_train.mean()*100:.2f}%)")
+        print(f"  테스트 세트: 1등 {y_test.sum()}개 / 전체 {len(y_test)}개 ({y_test.mean()*100:.2f}%)")
+        
+        # 🔧 4. NaN 값 완전 제거 (SMOTE 적용 전 필수!)
+        print("\n2️⃣ NaN 값 완전 제거 중...")
+        
+        print(f"  제거 전: X_train shape = {X_train.shape}")
+        print(f"  NaN 값 개수: {X_train.isnull().sum().sum()}개")
+        
+        # 방법 1: NaN이 있는 행 완전 제거
+        nan_mask = X_train.isnull().any(axis=1)
+        clean_indices = ~nan_mask
+        
+        X_train_clean = X_train[clean_indices]
+        y_train_clean = y_train[clean_indices]
+        
+        print(f"  제거 후: X_train shape = {X_train_clean.shape}")
+        print(f"  제거된 행: {nan_mask.sum()}개")
+        print(f"  남은 NaN 개수: {X_train_clean.isnull().sum().sum()}개")
+        
+        # 만약 여전히 NaN이 있다면 0으로 대체
+        if X_train_clean.isnull().sum().sum() > 0:
+            print("  ⚠️ 여전히 NaN이 있어서 0으로 대체합니다.")
+            X_train_clean = X_train_clean.fillna(0)
+        
+        # 테스트 데이터도 동일하게 처리
+        X_test_clean = X_test.fillna(0)
+        
+        print(f"  최종 훈련 데이터: {X_train_clean.shape}, NaN: {X_train_clean.isnull().sum().sum()}개")
+        print(f"  최종 테스트 데이터: {X_test_clean.shape}, NaN: {X_test_clean.isnull().sum().sum()}개")
+        
+        # 5. SMOTE 적용 (이제 안전함)
+        print("\n3️⃣ SMOTE로 데이터 균형 조정...")
+        from imblearn.over_sampling import SMOTE
+        
+        # SMOTE 적용 전 마지막 검증
+        assert X_train_clean.isnull().sum().sum() == 0, "여전히 NaN 값이 있습니다!"
+        assert not X_train_clean.isin([np.inf, -np.inf]).any().any(), "무한대 값이 있습니다!"
+        
+        smote = SMOTE(
+            sampling_strategy=0.15,  # 1등을 15%까지
+            random_state=42,
+            k_neighbors=min(3, y_train_clean.sum() - 1)  # 1등 샘플 수보다 작게
+        )
+        
+        try:
+            X_train_balanced, y_train_balanced = smote.fit_resample(X_train_clean, y_train_clean)
+            print(f"  ✅ SMOTE 성공!")
+            print(f"  SMOTE 후: 1등 {y_train_balanced.sum()}개 / 전체 {len(y_train_balanced)}개 ({y_train_balanced.mean()*100:.2f}%)")
+        except Exception as e:
+            print(f"  ❌ SMOTE 실패: {e}")
+            print("  원본 데이터를 그대로 사용합니다.")
+            X_train_balanced = X_train_clean
+            y_train_balanced = y_train_clean
+        
+        # 6. 스케일링
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_balanced)
+        X_test_scaled = scaler.transform(X_test_clean)
+        
+        # 7. 정밀도 최적화 모델들
+        print("\n4️⃣ 정밀도 최적화 모델 훈련...")
+        
+        # XGBoost import 추가
+        try:
+            import xgboost as xgb
+            xgb_available = True
+        except ImportError:
+            print("  ⚠️ XGBoost가 설치되지 않아 제외됩니다.")
+            xgb_available = False
+        
+        models = {
+            # 🎯 정밀도 특화 RandomForest
+            'PrecisionRF': RandomForestClassifier(
+                n_estimators=300,
+                max_depth=10,
+                min_samples_split=20,
+                min_samples_leaf=10,
+                class_weight={0: 1, 1: 10},
+                max_features='sqrt',
+                random_state=42
+            ),
+            
+            # 🎯 보수적 로지스틱 회귀
+            'PrecisionLR': LogisticRegression(
+                class_weight={0: 1, 1: 15},
+                C=0.05,
+                max_iter=2000,
+                random_state=42
+            )
+        }
+        
+        # XGBoost가 있을 때만 추가
+        if xgb_available:
+            models['PrecisionXGB'] = xgb.XGBClassifier(
+                n_estimators=200,  # 줄임
+                max_depth=4,
+                learning_rate=0.05,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                scale_pos_weight=8,
+                random_state=42,
+                eval_metric='logloss',  # 명시적으로 설정
+                use_label_encoder=False  # 경고 방지
+            )
+        
+        results = {}
+        
+        for name, model in models.items():
+            print(f"\n🔥 {name} 훈련 중...")
+            
+            try:
+                # 훈련
+                if 'XGB' in name and xgb_available:
+                    # XGBoost 버전 호환성 처리
+                    try:
+                        # 최신 버전 시도
+                        model.fit(
+                            X_train_balanced, y_train_balanced,
+                            eval_set=[(X_test_clean, y_test)],
+                            verbose=False
+                        )
+                    except TypeError:
+                        # 구버전 또는 다른 방법 시도
+                        model.fit(X_train_balanced, y_train_balanced)
+                    
+                    y_pred = model.predict(X_test_clean)
+                    y_prob = model.predict_proba(X_test_clean)[:, 1]
+                    
+                elif 'LR' in name:
+                    model.fit(X_train_scaled, y_train_balanced)
+                    y_pred = model.predict(X_test_scaled)
+                    y_prob = model.predict_proba(X_test_scaled)[:, 1]
+                    
+                else:  # RandomForest
+                    model.fit(X_train_balanced, y_train_balanced)
+                    y_pred = model.predict(X_test_clean)
+                    y_prob = model.predict_proba(X_test_clean)[:, 1]
+                
+                # 성능 평가
+                accuracy = accuracy_score(y_test, y_pred)
+                precision = precision_score(y_test, y_pred, zero_division=0)
+                recall = recall_score(y_test, y_pred, zero_division=0)
+                f1 = f1_score(y_test, y_pred, zero_division=0)
+                auc = roc_auc_score(y_test, y_prob)
+                
+                results[name] = {
+                    'model': model,
+                    'accuracy': accuracy,
+                    'precision': precision,
+                    'recall': recall,
+                    'f1': f1,
+                    'auc': auc,
+                    'probabilities': y_prob
+                }
+                
+                print(f"  정확도: {accuracy:.3f}")
+                print(f"  정밀도: {precision:.3f} ⭐⭐⭐")
+                print(f"  재현율: {recall:.3f}")
+                print(f"  F1: {f1:.3f}")
+                
+            except Exception as e:
+                print(f"  ❌ {name} 모델 훈련 실패: {e}")
+                continue
+        
+        if not results:
+            print("❌ 모든 모델 훈련이 실패했습니다.")
+            return None
+        
+        # 8. 앙상블 및 임계값 최적화
+        print("\n5️⃣ 정밀도 기반 스마트 앙상블...")
+        
+        # 정밀도가 높은 모델에 더 높은 가중치
+        precision_scores = [results[name]['precision'] for name in results]
+        
+        if max(precision_scores) > 0:
+            max_precision = max(precision_scores)
+            weights = []
+            for p in precision_scores:
+                weight = (p / max_precision) ** 2 if p > 0 else 0.1
+                weights.append(weight)
+            weights = np.array(weights) / np.sum(weights)
+        else:
+            weights = np.ones(len(precision_scores)) / len(precision_scores)
+        
+        # 앙상블 예측
+        ensemble_prob = np.average(
+            [results[name]['probabilities'] for name in results],
+            axis=0,
+            weights=weights
+        )
+        
+        # 최적 임계값 찾기
+        best_threshold = 0.5
+        best_precision = 0
+        
+        for threshold in np.arange(0.3, 0.9, 0.02):
+            pred = (ensemble_prob > threshold).astype(int)
+            if pred.sum() > 0:
+                prec = precision_score(y_test, pred, zero_division=0)
+                if prec > best_precision:
+                    best_precision = prec
+                    best_threshold = threshold
+        
+        ensemble_pred = (ensemble_prob > best_threshold).astype(int)
+        ensemble_accuracy = accuracy_score(y_test, ensemble_pred)
+        ensemble_precision = precision_score(y_test, ensemble_pred, zero_division=0)
+        ensemble_recall = recall_score(y_test, ensemble_pred, zero_division=0)
+        ensemble_f1 = f1_score(y_test, ensemble_pred, zero_division=0)
+        
+        print(f"\n🎭 최적화된 앙상블 결과:")
+        print(f"  최적 임계값: {best_threshold:.3f}")
+        print(f"  정확도: {ensemble_accuracy:.3f}")
+        print(f"  정밀도: {ensemble_precision:.3f} 🎯🎯🎯")
+        print(f"  재현율: {ensemble_recall:.3f}")
+        print(f"  F1: {ensemble_f1:.3f}")
+        
+        # 9. 모델 저장
+        self.models = results
+        self.scaler = scaler
+        self.best_threshold = best_threshold
+        
+        # ModelManager를 통한 안전한 저장
+        model_data = {
+            'models': self.models,
+            'scaler': self.scaler,
+            'label_encoders': self.label_encoders,
+            'feature_columns': self.feature_columns,
+            'best_threshold': self.best_threshold,
+            'save_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        success = self.model_manager.save_model_safe(model_name, model_data)
+        if success:
+            print(f"💾 모델이 안전하게 저장되었습니다: {model_name}")
+        else:
+            print(f"⚠️ 모델 저장에 실패했지만 메모리에는 로드되어 있습니다.")
+        
+        print(f"\n✅ 정밀도 극대화 모델 훈련 완료!")
+        print(f"🎯 최종 정밀도: {ensemble_precision:.1%}")
+        
+        return {
+            'results': results,
+            'ensemble_precision': ensemble_precision,
+            'ensemble_accuracy': ensemble_accuracy,
+            'best_threshold': best_threshold,
+            'weights': dict(zip(results.keys(), weights.round(3)))
+        }
+
+    # 예측 함수도 업데이트
+    def predict_with_precision_focus(self, race_date, meet_code=None, race_no=None):
+        """
+        정밀도 중심 예측 (보수적 접근)
+        """
+        # 기존 예측 로직 실행
+        result_df = self.predict_race_winners(race_date, meet_code, race_no)
+        
+        if result_df is None:
+            return None
+        
+        # 보수적 임계값 적용
+        threshold = getattr(self, 'best_threshold', 0.6)
+        result_df['high_confidence'] = (result_df['win_probability'] > threshold).astype(int)
+        result_df['recommendation'] = result_df['high_confidence'].map({
+            1: '🎯 강력 추천',
+            0: '⚠️ 보류'
+        })
+        
+        print(f"\n🎯 정밀도 중심 추천 (임계값: {threshold:.3f}):")
+        high_conf = result_df[result_df['high_confidence'] == 1]
+        
+        if len(high_conf) > 0:
+            print(f"강력 추천: {len(high_conf)}마리")
+            for _, horse in high_conf.iterrows():
+                print(f"  🏆 {horse['horse_name']} (확률: {horse['win_probability']:.3f})")
+        else:
+            print("⚠️ 이번 경주는 확신할 만한 말이 없습니다.")
+        
+        return result_df
+    
+    # 기존 HorseRacing1stPlacePredictor 클래스에 추가할 함수
+
+    def create_racing_specific_features(self, df):
+        """
+        경마에 특화된 고급 특성 생성 (정밀도 향상에 핵심)
+        """
+        print("🏇 경마 특화 특성 생성 중...")
+        
+        # 1. 🎯 상대적 경쟁력 (경주 내에서의 상대적 위치)
+        def calculate_relative_strength(group):
+            # 경주 내에서 각 말의 상대적 실력
+            group['relative_experience'] = (group['prev_total_races'] - group['prev_total_races'].mean()) / (group['prev_total_races'].std() + 1)
+            group['relative_win_rate'] = (group['horse_win_rate'] - group['horse_win_rate'].mean()) / (group['horse_win_rate'].std() + 0.01)
+            group['relative_recent_form'] = (group['recent_form'] - group['recent_form'].mean()) / (group['recent_form'].std() + 0.1)
+            
+            # 경주 내 랭킹 (1등 가능성이 높을수록 낮은 숫자)
+            group['experience_rank_in_race'] = group['prev_total_races'].rank(ascending=False, method='min')
+            group['win_rate_rank_in_race'] = group['horse_win_rate'].rank(ascending=False, method='min')
+            group['recent_form_rank_in_race'] = group['recent_form'].rank(ascending=False, method='min')
+            
+            return group
+        
+        df = df.groupby(['race_date', 'meet_code', 'race_id']).apply(calculate_relative_strength).reset_index(drop=True)
+        
+        # 2. 🎯 종합 우위 지수 (가장 중요!)
+        df['dominance_score'] = (
+            (df['relative_win_rate'] * 0.4) +           # 승률이 가장 중요
+            (df['relative_recent_form'] * 0.3) +        # 최근 폼
+            (df['relative_experience'] * 0.2) +         # 경험
+            (-df['entry_number'] / df['total_horses'] * 0.1)  # 출전 번호 (낮을수록 유리)
+        )
+        
+        # 3. 🎯 일관성 지수 (안정적인 말일수록 1등 가능성 높음)
+        df['consistency_score'] = np.where(
+            df['prev_total_races'] >= 5,
+            1 / (df['prev_total_avg_rank'].fillna(6) + 0.1),  # 평균 순위가 좋을수록 높은 점수
+            0.1  # 경험 부족하면 낮은 점수
+        )
+        
+        # 4. 🎯 거리 적합성 (간단 버전)
+        df['distance_fitness'] = np.where(
+            df['races_at_distance'].fillna(0) >= 2,
+            1 / (df['avg_rank_at_distance'].fillna(6) + 0.1),
+            0.5  # 해당 거리 경험 없으면 중간 점수
+        )
+        
+        # 5. 🎯 기수-말 궁합 (기수 승률로 대체)
+        df['jockey_horse_synergy'] = df['jockey_win_rate']
+        
+        # 6. 🎯 컨디션 지표 (최근 성적 기반)
+        df['momentum'] = np.where(
+            df['prev_5_avg_rank'].notna(),
+            (6 - df['prev_5_avg_rank']) / 2,  # 최근 5경주 성적을 모멘텀으로 변환
+            0
+        )
+        
+        # 7. 🎯 최종 우승 확률 점수 (모든 요소 종합)
+        df['championship_probability'] = (
+            df['dominance_score'] * 0.25 +
+            df['consistency_score'] * 0.20 +
+            df['distance_fitness'] * 0.15 +
+            df['jockey_horse_synergy'] * 0.15 +
+            (df['momentum'] / 3 + 0.33) * 0.10 +  # 정규화
+            df['horse_win_rate'] * 0.15
+        )
+        
+        # 8. 🎯 경주별 상대 순위 (가장 중요한 특성!)
+        def assign_race_rankings(group):
+            group['championship_rank'] = group['championship_probability'].rank(ascending=False, method='min')
+            group['is_top_candidate'] = (group['championship_rank'] <= 3).astype(int)
+            group['is_clear_favorite'] = (group['championship_rank'] == 1).astype(int)
+            return group
+        
+        df = df.groupby(['race_date', 'meet_code', 'race_id']).apply(assign_race_rankings).reset_index(drop=True)
+        
+        # 새로운 특성들 추가
+        new_features = [
+            'dominance_score', 'consistency_score', 'distance_fitness', 
+            'jockey_horse_synergy', 'momentum', 'championship_probability',
+            'championship_rank', 'is_top_candidate', 'is_clear_favorite',
+            'relative_win_rate', 'relative_recent_form', 'win_rate_rank_in_race'
+        ]
+        
+        print(f"✅ {len(new_features)}개 경마 특화 특성 생성 완료")
+        print("🎯 핵심 특성: championship_probability, dominance_score, is_clear_favorite")
+        
+        return df
+    def list_available_models(self):
+        """
+        사용 가능한 모델 목록 조회
+        """
+        return self.model_manager.list_saved_models()
+
+    def check_current_model_performance(self):
+        """
+        현재 로드된 모델 성능 확인
+        """
+        return self.model_manager.check_model_performance()
+
+    def cleanup_old_models(self, keep_latest=3):
+        """
+        오래된 모델 파일 정리
+        """
+        return self.model_manager.cleanup_old_models(keep_latest)
+
+    def export_model_summary(self, output_file="model_summary.json"):
+        """
+        모델 요약 정보 내보내기
+        """
+        return self.model_manager.export_model_info(output_file)
