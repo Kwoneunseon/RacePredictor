@@ -269,7 +269,8 @@ class HorseRacing1stPlacePredictor:
             FROM (
                 SELECT *
                 FROM race_analysis_complete
-                WHERE race_date BETWEEN $1::date AND $2::date
+                WHERE final_rank IS NOT NULL 
+                AND race_date BETWEEN $1::date AND $2::date
                 AND prev_total_races >= 3  -- 최소 3경주 이상 출전한 말만
                 ORDER BY race_date, race_id, meet_code, entry_number
                 LIMIT {page_size} OFFSET {offset}
@@ -402,6 +403,46 @@ class HorseRacing1stPlacePredictor:
         
         return df
     
+    def safe_convert_to_numeric(self, df):
+        """
+        모든 object 컬럼을 안전하게 숫자로 변환
+        """
+        print("🔧 모든 문자열 컬럼을 숫자로 변환 중...")
+        
+        # 특별 매핑이 필요한 컬럼들
+        special_mappings = {
+            'budam': {
+                '핸디캡': 0, 
+                '마령': 1, 
+                '별정a': 2, 
+                '별정b': 3, 
+                '별정c': 4, 
+                '별정d': 5,
+                'nan': 0, None: 0, '': 0, 'unknown': 0
+            },
+            'weight_type': {
+                # weight_type은 항상 2라고 하셨으니 그대로 2로 설정
+                2: 2, '2': 2, 
+                'nan': 2, None: 2, '': 2, 'unknown': 2
+            }
+        }        
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                print(f"  🔄 {col} 처리 중...")
+                
+                # 이미 LabelEncoder로 처리된 컬럼들은 건너뛰기
+                if col in ['horse_class', 'race_grade', 'track_condition', 'weather']:
+                    continue
+                
+                # 특별 매핑이 있는 컬럼
+                if col in special_mappings:
+                    df[col] = df[col].map(special_mappings[col]).fillna(0)
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)                    
+              
+        
+        print("✅ 모든 컬럼 숫자 변환 완료")
+        return df
+    
     def _preprocess_data(self, df, is_training=False):
         """
         데이터 전처리
@@ -411,6 +452,12 @@ class HorseRacing1stPlacePredictor:
         """
         print("🔧 데이터 전처리 중...")
         
+        # final_rank가 16을 초과하는 값들 16으로 변경
+        if 'final_rank' in df.columns:
+            over_16 = df['final_rank'] > 16
+            if over_16.any():
+                df.loc[over_16, 'final_rank'] = 16
+
         # 결측치 처리
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
@@ -542,10 +589,13 @@ class HorseRacing1stPlacePredictor:
         # 여러 모델 훈련
         models = {
             'RandomForest': RandomForestClassifier(
-                n_estimators=200, 
-                max_depth=10, 
-                random_state=42,
-                class_weight='balanced'
+                n_estimators=500,  # 300 → 500
+                max_depth=15,      # 10 → 15
+                min_samples_split=5,   # 20 → 5
+                min_samples_leaf=2,    # 10 → 2
+                class_weight={0: 1, 1: 20},  # 10 → 20
+                max_features='log2',   # sqrt → log2
+                random_state=42
             ),
             'GradientBoosting': GradientBoostingClassifier(
                 n_estimators=200, 
@@ -684,11 +734,11 @@ class HorseRacing1stPlacePredictor:
         print(f"🔮 {race_date} 경주 예측 중...")       
 
         # WHERE 조건 구성
-        where_conditions = [f"re.race_date = '{race_date}'"]
+        where_conditions = [f"race_date = '{race_date}'"]
         if meet_code:
-            where_conditions.append(f"re.meet_code = '{meet_code}'")
+            where_conditions.append(f"meet_code = '{meet_code}'")
         if race_no:
-            where_conditions.append(f"r.race_id = '{race_no}'")  # 문자열로 처리
+            where_conditions.append(f"race_id = '{race_no}'")  # 문자열로 처리
         
         where_clause = " AND ".join(where_conditions)
         
@@ -697,49 +747,70 @@ class HorseRacing1stPlacePredictor:
                 SELECT row_to_json(r) as result
                 FROM (
                     SELECT DISTINCT
-                        re.race_id,
-                        re.horse_id,
-                        re.race_date,
-                        re.meet_code,
-                        re.entry_number,
-                        re.horse_weight,
-                        re.final_rank,
-                        CASE WHEN re.final_rank = 1 THEN 1 ELSE 0 END as is_winner,
+                        race_id,
+                        horse_id,
+                        race_date,
+                        meet_code,
+                        entry_number,
+                        horse_weight,
+                        final_rank,
+                        finish_time,
+                        horse_race_days,
+                        horse_weight_diff,
+                        budam,
+                        budam_weight,
+                        horse_rating, 
+                        is_winner,
                         
                         -- 말 정보
-                        h.age as horse_age,
-                        CASE WHEN h.gender = '수컷' THEN 1 ELSE 0 END as is_male,
-                        h.rank as horse_class,
-                        h.name as horse_name,
-                        
+                        horse_age,
+                        is_male,
+                        horse_class,
+                        horse_name,
+
                         -- 경주 정보
-                        r.race_distance,
-                        r.total_horses,
-                        r.planned_horses,
-                        r.race_grade,
-                        r.track_condition,
-                        r.weather,
-                        r.weight_type,   
+                        race_distance,
+                        total_horses,
+                        planned_horses,
+                        race_grade,
+                        track_condition,
+                        weather,
+                        weight_type,  
+
+                        prev_total_races,
+                        prev_5_avg_rank,
+                        prev_total_avg_rank,
+                        prev_wins,
+                        prev_top3,
+                        prev_top5,
+                        year_wins,
+                        year_top3,
+                        year_top5,
+                        total_races,
+                        total_win_rate,
+                        total_place_rate,
+                        year_races,
+                        year_win_rate,
+                        year_place_rate, 
 
                         -- 기수 정보 (NULL 처리)
-                        COALESCE(j.total_races, 0) as jockey_total_races,
-                        COALESCE(j.total_wins, 0) as jockey_total_wins,
-                        COALESCE(j.year_races, 0) as jockey_year_races,
-                        COALESCE(j.year_wins, 0) as jockey_year_wins,
+                        COALESCE(jockey_total_races, 0) as jockey_total_races,
+                        COALESCE(jockey_total_wins, 0) as jockey_total_wins,
+                        COALESCE(jockey_year_races, 0) as jockey_year_races,
+                        COALESCE(jockey_year_wins, 0) as jockey_year_wins,
                         
                         -- 조교사 정보 (NULL 처리)
-                        COALESCE(t.rc_cnt_t, 0) as trainer_total_races,
-                        COALESCE(t.ord1_cnt_t, 0) as trainer_total_wins,
-                        COALESCE(t.rc_cnt_y, 0) as trainer_year_races,
-                        COALESCE(t.ord1_cnt_y, 0) as trainer_year_wins
+                        COALESCE(trainer_total_races, 0) as trainer_total_races,
+                        COALESCE(trainer_total_wins, 0) as trainer_total_wins,
+                        COALESCE(trainer_year_races, 0) as trainer_year_races,
+                        COALESCE(trainer_year_wins, 0) as trainer_year_wins,
+                        
+                        avg_rank_at_distance,
+                        races_at_distance
                                             
-                    FROM race_entries re
-                    JOIN horses h ON re.horse_id = h.horse_id
-                    JOIN races r ON re.race_id = r.race_id AND re.race_date = r.race_date and r.meet_code = re.meet_code
-                    LEFT JOIN jockeys j ON re.jk_no = j.jk_no
-                    LEFT JOIN trainers t ON re.trainer_id = t.trainer_id
+                    FROM race_analysis_complete
                     WHERE {where_clause}
-                    ORDER BY re.race_id, re.entry_number
+                    ORDER BY race_id, entry_number
                 ) r
                 """
                 
@@ -754,6 +825,7 @@ class HorseRacing1stPlacePredictor:
                 return None
                 
             df = pd.DataFrame([row["result"] for row in result.data])
+            df = self.safe_convert_to_numeric(df)
             
             # 중복 제거 (혹시 모를 중복 데이터)
             df = df.drop_duplicates(subset=['race_id', 'race_date', 'meet_code', 'horse_id', 'entry_number'])
@@ -1210,6 +1282,7 @@ class HorseRacing1stPlacePredictor:
         정밀도 극대화를 위한 통합 솔루션 (NaN 값 처리 개선)
         """
         print("🚀 정밀도 극대화 모델 훈련 시작!")
+        df = self.safe_convert_to_numeric(df)
         
         # 1. 경마 특화 특성 생성
         print("\n1️⃣ 경마 특화 특성 생성...")
@@ -1218,11 +1291,20 @@ class HorseRacing1stPlacePredictor:
         # 2. 업데이트된 특성 목록
         feature_cols = [
             # 기본 특성
-            'horse_age', 'is_male', 'horse_class', 'race_distance', 'total_horses',
-            'horse_weight', 'race_grade', 'track_condition', 'weather',
+            'horse_weight', 'horse_age', 'is_male', 'horse_class', 'race_distance', 
+            'finish_time', 'horse_race_days', 'horse_weight_diff', 'budam', 'budam_weight', 'horse_rating', 
+            'race_distance', 'total_horses', 'planned_horses', 'race_grade', 'track_condition', 'weather', 'weight_type',
             'prev_total_races', 'prev_5_avg_rank', 'prev_total_avg_rank',
-            'jockey_win_rate', 'trainer_win_rate', 'horse_win_rate', 'horse_top3_rate',
-            'experience_score', 'recent_form',
+            'prev_wins', 'prev_top3', 'prev_top5',
+            'year_wins', 'year_top3', 'year_top5',
+            'total_races', 'total_win_rate', 'total_place_rate',        
+            'year_races', 'year_win_rate', 'year_place_rate',     
+
+            'jockey_total_races', 'jockey_total_wins', 'jockey_year_races', 'jockey_year_wins',
+            'trainer_total_races', 'trainer_total_wins', 'trainer_year_races', 'trainer_year_wins',
+            'avg_rank_at_distance', 'races_at_distance',
+
+            'horse_top3_rate','experience_score', 'recent_form',
             
             # 🎯 새로운 핵심 특성들
             'championship_probability',  # 가장 중요!
@@ -1367,21 +1449,23 @@ class HorseRacing1stPlacePredictor:
             try:
                 # 훈련
                 if 'XGB' in name and xgb_available:
-                    # XGBoost 버전 호환성 처리
+                    # DataFrame을 numpy array로 변환
+                    X_train_xgb = X_train_balanced.values
+                    X_test_xgb = X_test_clean.values
+                    
                     try:
-                        # 최신 버전 시도
+                        # eval_set 사용 시도
                         model.fit(
-                            X_train_balanced, y_train_balanced,
-                            eval_set=[(X_test_clean, y_test)],
+                            X_train_xgb, y_train_balanced,
+                            eval_set=[(X_test_xgb, y_test)],  # numpy로 변환된 데이터 사용
                             verbose=False
                         )
-                    except TypeError:
-                        # 구버전 또는 다른 방법 시도
-                        model.fit(X_train_balanced, y_train_balanced)
+                    except (TypeError, AttributeError):
+                        # 기본 방식으로 재시도
+                        model.fit(X_train_xgb, y_train_balanced)
                     
-                    y_pred = model.predict(X_test_clean)
-                    y_prob = model.predict_proba(X_test_clean)[:, 1]
-                    
+                    y_pred = model.predict(X_test_xgb)  # numpy 사용
+                    y_prob = model.predict_proba(X_test_xgb)[:, 1]  # numpy 사용
                 elif 'LR' in name:
                     model.fit(X_train_scaled, y_train_balanced)
                     y_pred = model.predict(X_test_scaled)
@@ -1643,3 +1727,262 @@ class HorseRacing1stPlacePredictor:
         모델 요약 정보 내보내기
         """
         return self.model_manager.export_model_info(output_file)
+    
+    
+    # 상세 NaN 분석 함수들
+
+    def analyze_nan_details(self, df):
+        """
+        NaN 데이터 상세 분석
+        """
+        print("🔍 NaN 데이터 상세 분석")
+        print("=" * 80)
+        
+        # 1. 전체 현황
+        total_cells = len(df) * len(df.columns)
+        nan_cells = df.isnull().sum().sum()
+        print(f"📊 전체 현황:")
+        print(f"  데이터 크기: {df.shape}")
+        print(f"  전체 셀: {total_cells:,}개")
+        print(f"  NaN 셀: {nan_cells:,}개 ({nan_cells/total_cells*100:.2f}%)")
+        
+        # 2. 컬럼별 NaN 상세 분석
+        print(f"\n📋 컬럼별 NaN 상세 분석:")
+        print("=" * 80)
+        
+        nan_summary = []
+        for col in df.columns:
+            nan_count = df[col].isnull().sum()
+            if nan_count > 0:
+                nan_percentage = (nan_count / len(df)) * 100
+                
+                # 데이터 타입 확인
+                dtype = str(df[col].dtype)
+                
+                # 유니크 값 개수 (NaN 제외)
+                unique_count = df[col].nunique()
+                
+                # 샘플 값들 (NaN 아닌 것들)
+                sample_values = df[col].dropna().head(3).tolist()
+                
+                nan_summary.append({
+                    'column': col,
+                    'nan_count': nan_count,
+                    'nan_percentage': nan_percentage,
+                    'dtype': dtype,
+                    'unique_count': unique_count,
+                    'sample_values': sample_values
+                })
+        
+        # NaN 비율로 정렬
+        nan_summary.sort(key=lambda x: x['nan_percentage'], reverse=True)
+        
+        for info in nan_summary:
+            print(f"\n🔹 {info['column']}")
+            print(f"   NaN: {info['nan_count']:,}개 ({info['nan_percentage']:.1f}%)")
+            print(f"   타입: {info['dtype']}")
+            print(f"   유니크값: {info['unique_count']:,}개")
+            print(f"   샘플: {info['sample_values']}")
+        
+        # 3. 카테고리별 분석
+        print(f"\n🏷️ 카테고리별 NaN 분석:")
+        print("=" * 80)
+        
+        categories = {
+            '🆕 API 신규 컬럼': [
+                'recent_race_rating', 'recent_horse_weight', 'recent_burden_weight',
+                'api_total_races', 'api_total_wins', 'api_total_places',
+                'api_total_win_rate', 'api_total_place_rate',
+                'api_year_races', 'api_year_wins', 'api_year_win_rate', 'api_year_place_rate'
+            ],
+            '🏇 경마 특화 특성': [
+                'championship_probability', 'dominance_score', 'consistency_score',
+                'distance_fitness', 'jockey_horse_synergy', 'momentum',
+                'championship_rank', 'is_clear_favorite', 'relative_win_rate'
+            ],
+            '📊 과거 성적': [
+                'prev_total_races', 'prev_5_avg_rank', 'prev_total_avg_rank',
+                'prev_wins', 'prev_top3', 'avg_rank_at_distance', 'races_at_distance'
+            ],
+            '👤 기수/조교사': [
+                'jockey_total_races', 'jockey_total_wins', 'jockey_year_races', 'jockey_year_wins',
+                'trainer_total_races', 'trainer_total_wins', 'trainer_year_races', 'trainer_year_wins'
+            ],
+            '🏁 기본 정보': [
+                'horse_weight', 'horse_age', 'is_male', 'horse_class', 'race_distance',
+
+                'total_horses','race_grade', 'track_condition', 'weather'
+            ]
+        }
+        
+        for category, cols in categories.items():
+            category_cols = [col for col in cols if col in df.columns]
+            if category_cols:
+                category_nan = sum(df[col].isnull().sum() for col in category_cols)
+                category_total = len(df) * len(category_cols)
+                
+                print(f"\n{category}:")
+                print(f"  전체 NaN: {category_nan:,}/{category_total:,} ({category_nan/category_total*100:.1f}%)")
+                
+                for col in category_cols:
+                    if col in df.columns:
+                        nan_count = df[col].isnull().sum()
+                        if nan_count > 0:
+                            print(f"    ❌ {col}: {nan_count:,}개 ({nan_count/len(df)*100:.1f}%)")
+                        else:
+                            print(f"    ✅ {col}: 0개")
+        
+        # 4. NaN 패턴 분석
+        print(f"\n🔗 NaN 패턴 분석:")
+        print("=" * 80)
+        
+        # 완전히 NaN인 행
+        all_nan_mask = df.isnull().all(axis=1)
+        all_nan_count = all_nan_mask.sum()
+        print(f"  모든 컬럼이 NaN인 행: {all_nan_count:,}개")
+        
+        # 50% 이상 NaN인 행
+        nan_per_row = df.isnull().sum(axis=1)
+        mostly_nan_mask = nan_per_row > (len(df.columns) * 0.5)
+        mostly_nan_count = mostly_nan_mask.sum()
+        print(f"  50% 이상 NaN인 행: {mostly_nan_count:,}개")
+        
+        # NaN 개수별 행 분포
+        print(f"\n  📈 행별 NaN 개수 분포:")
+        nan_counts = nan_per_row.value_counts().sort_index()
+        for nan_count, row_count in nan_counts.head(10).items():
+            print(f"    NaN {nan_count:2d}개인 행: {row_count:,}개")
+        
+        # 5. 가장 문제가 되는 컬럼들 찾기
+        print(f"\n🚨 가장 문제가 되는 컬럼들 (NaN 50% 이상):")
+        print("=" * 80)
+        
+        problematic_cols = []
+        for col in df.columns:
+            nan_percentage = (df[col].isnull().sum() / len(df)) * 100
+            if nan_percentage >= 50:
+                problematic_cols.append((col, nan_percentage))
+        
+        problematic_cols.sort(key=lambda x: x[1], reverse=True)
+        
+        if problematic_cols:
+            for col, percentage in problematic_cols:
+                print(f"  ❌ {col}: {percentage:.1f}% NaN")
+            
+            print(f"\n💡 제안사항:")
+            print(f"  1. 위 컬럼들을 특성에서 제외하거나")
+            print(f"  2. 기본값으로 대체하거나") 
+            print(f"  3. 데이터 수집 과정을 점검해보세요")
+        else:
+            print(f"  ✅ 50% 이상 NaN인 컬럼은 없습니다")
+        
+        # 6. 샘플 행 분석
+        print(f"\n🔍 NaN 샘플 행 분석 (상위 5개 행):")
+        print("=" * 80)
+        
+        # NaN이 많은 행들 찾기
+        nan_per_row = df.isnull().sum(axis=1)
+        top_nan_rows = nan_per_row.nlargest(5).index
+        
+        for idx in top_nan_rows:
+            row_nan_count = nan_per_row[idx]
+            print(f"\n  📍 행 {idx}: {row_nan_count}개 NaN")
+            
+            # 해당 행의 NaN인 컬럼들 보여주기
+            nan_cols = df.loc[idx].isnull()
+            nan_col_names = df.columns[nan_cols].tolist()
+            
+            if len(nan_col_names) <= 10:
+                print(f"    NaN 컬럼들: {nan_col_names}")
+            else:
+                print(f"    NaN 컬럼들: {nan_col_names[:10]}... (총 {len(nan_col_names)}개)")
+            
+            # 해당 행의 정상 데이터 몇 개 보여주기
+            valid_data = df.loc[idx].dropna()
+            if len(valid_data) > 0:
+                print(f"    정상 데이터 샘플: {dict(valid_data.head(3))}")
+        
+        return nan_summary
+
+    def show_nan_heatmap(self, df, max_cols=20):
+        """
+        NaN 히트맵 시각화 (텍스트 버전)
+        """
+        print(f"\n🔥 NaN 히트맵 (상위 {max_cols}개 컬럼):")
+        print("=" * 80)
+        
+        # NaN이 많은 컬럼들 선택
+        nan_counts = df.isnull().sum().sort_values(ascending=False)
+        top_nan_cols = nan_counts.head(max_cols).index.tolist()
+        
+        if not top_nan_cols:
+            print("✅ NaN이 있는 컬럼이 없습니다!")
+            return
+        
+        # 샘플 행들 (100개씩)
+        sample_rows = range(0, min(len(df), 1000), 10)  # 10개씩 건너뛰며 100개 행
+        
+        print("    " + "".join(f"{i%10}" for i in range(len(top_nan_cols))))
+        print("    " + "-" * len(top_nan_cols))
+        
+        for row_idx in sample_rows:
+            if row_idx >= len(df):
+                break
+                
+            row_display = f"{row_idx:3d}|"
+            for col in top_nan_cols:
+                if df.loc[row_idx, col] is pd.isna(df.loc[row_idx, col]) and pd.isna(df.loc[row_idx, col]):
+                    row_display += "X"  # NaN
+                else:
+                    row_display += "."  # 정상 데이터
+            
+            print(row_display)
+            
+            if len(sample_rows) > 20 and row_idx == sample_rows[19]:
+                print("    ... (중간 생략) ...")
+                break
+        
+        print("\n  범례: X = NaN, . = 정상 데이터")
+        print("  컬럼 순서 (NaN 많은 순):")
+        for i, col in enumerate(top_nan_cols):
+            nan_count = df[col].isnull().sum()
+            print(f"    {i%10}: {col} ({nan_count:,}개 NaN)")
+
+    # 사용 예시 함수
+    def full_nan_analysis(self, df):
+        """
+        완전한 NaN 분석 실행
+        """
+        print("🚀 완전한 NaN 분석 시작!")
+        print("=" * 100)
+        
+        # 1. 상세 분석
+        nan_summary = self.analyze_nan_details(df)
+        
+        # 2. 히트맵
+        self.show_nan_heatmap(df)
+        
+        # 3. 요약 및 제안
+        print(f"\n📝 분석 요약 및 제안:")
+        print("=" * 80)
+        
+        total_nan = df.isnull().sum().sum()
+        total_cells = len(df) * len(df.columns)
+        
+        if total_nan == 0:
+            print("✅ NaN 문제 없음!")
+        elif total_nan / total_cells < 0.1:
+            print("✅ NaN 비율 낮음 (10% 미만) - 간단한 대체로 해결 가능")
+        elif total_nan / total_cells < 0.3:
+            print("⚠️ NaN 비율 보통 (10-30%) - 신중한 대체 전략 필요")
+        else:
+            print("🚨 NaN 비율 높음 (30% 이상) - 데이터 수집 과정 점검 필요")
+        
+        # 가장 문제되는 컬럼들
+        high_nan_cols = [info for info in nan_summary if info['nan_percentage'] > 50]
+        if high_nan_cols:
+            print(f"\n🚨 제거 고려 대상 컬럼들 (NaN 50% 이상):")
+            for info in high_nan_cols:
+                print(f"  - {info['column']}: {info['nan_percentage']:.1f}% NaN")
+        
+        return nan_summary

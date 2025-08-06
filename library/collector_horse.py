@@ -124,17 +124,11 @@ def parse_additional_horse_data(api_response):
     """
     API 응답을 파싱하여 테이블 구조에 맞는 데이터로 변환 (추가적인 정보)
     """
-    additional_data = {
-        'recent_burden_weight': '',
-        'recent_race_rating': 0,
-        'recent_horse_weight':0,
+    additional_data = {    
         'total_races' : 0,
-        'total_wins': 0,
-        'total_places': 0,
         'total_win_rate': 0.0,
         'total_place_rate': 0.0,
         'year_races': 0,
-        'year_wins': 0,
         'year_win_rate': 0.0,
         'year_place_rate': 0.0
     }
@@ -152,18 +146,11 @@ def parse_additional_horse_data(api_response):
                     items = [items]
                     
                 for item in items:
-                    additional_data['recent_burden_weight'] = item.get('recentBudam', '')
-                    additional_data['recent_race_rating'] = safe_int(item.get('recentRating', 0))
-                    additional_data['recent_horse_weight'] = safe_int(item.get('recentWgHr', 0))
-
-                    additional_data['total_races'] = safe_int(item.get('rcCnt', 0))
-                    additional_data['total_wins'] = safe_int(item.get('ord1CntT', 0))
-                    additional_data['total_places'] = safe_int(item.get('ord2CntT', 0))
+                    additional_data['total_races'] = safe_int(item.get('rcCntT', 0))
                     additional_data['total_win_rate'] = safe_float(item.get('winRateT', 0.0))
                     additional_data['total_place_rate'] = safe_float(item.get('qnlRateT', 0.0))
 
                     additional_data['year_races'] = safe_int(item.get('rcCntY', 0))
-                    additional_data['year_wins'] = safe_int(item.get('ord1CntY', 0))
                     additional_data['year_win_rate'] = safe_float(item.get('winRateY', 0.0))
                     additional_data['year_place_rate'] = safe_float(item.get('qnlRateY', 0.0))
 
@@ -477,7 +464,7 @@ def update_single_horse(horse_id):
 # 실행 옵션들
 if __name__ == "__main__":
     # 말 정보 수집 (upsert 방식)
-    collecting_horse_supabase(method='sequential', start_page=1, max_pages=100)
+    #collecting_horse_supabase(method='sequential', start_page=1, max_pages=100)
     
     # 특정 말 정보 업데이트 예시
-    # update_single_horse("20240001")
+    fetch_single_horse_data("0038052")
