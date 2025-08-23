@@ -363,9 +363,10 @@ def parse_and_normalize_race_data(api_response):
                         'horse_weight_diff': horse_weight_idff,  #마체중 증감
                         'budam' : item.get('budam'), 
                         'budam_weight': safe_int(item.get('wgBudam')),  #부담중량
-                        'horse_rating': safe_float(item.get('rating')),  #말평점
+                        'horse_rating': safe_float(item.get('rating'), default=31),  #말평점
                         'final_rank': safe_int(item.get('rcOrd')) if item.get('rcOrd') else safe_int(item.get('ord')),      #순위
                         'finish_time': safe_float(item.get('rcTime')),  #경주시간(초단위)
+                        'race_time': safe_float(item.get('rcTime')),  #경주시간(초단위)
                         #'diff_total': safe_float(item.get('diffTot')),  #1등과 시간차이 누적 
                         # 'diff_2nd': safe_float(item.get('rcDiff2')),
                         # 'diff_3rd': safe_float(item.get('rcDiff3')),

@@ -20,7 +20,7 @@ def safe_float(value, default=0.0):
     try:
         return float(value) if value and str(value).strip() != '' else default
     except:
-        return default
+        return None
 
 def safe_str(value, default=''):
     """안전한 문자열 변환"""
