@@ -17,7 +17,7 @@ def main():
     print("🔄 기존 모델 로드 시도")
     print("=" * 50)
     
-    model_loaded = predictor.get_loaded_model('precision_boosted_model_250822')
+    model_loaded = predictor.get_loaded_model('precision_boosted_model_250824')
 
     if model_loaded:
         print("✅ 기존 모델을 성공적으로 로드했습n니다!")
@@ -36,7 +36,7 @@ def main():
         df = predictor.extract_training_data_batch('2023-01-01', yesterday, batch_months=1)
                 
         if len(df) > 0:
-            predictor.precision_boost_training(df, test_size=0.2, model_name='precision_boosted_model_250822')            
+            predictor.precision_boost_training(df, test_size=0.2, model_name='precision_boosted_model_250824')            
         else:
             print("❌ 훈련 데이터가 충분하지 않습니다. 모델 훈련을 중단합니다.")
             return  
@@ -67,8 +67,9 @@ def main():
     # 오늘 날짜를 파라미터로 전달
     today = datetime.today().strftime('%Y-%m-%d')
  
-    predictor.predict_race_winners('2025-08-23')
-    predictor.predict_race_winners('2025-08-24')
+    predictor.predict_race_winners('2025-08-29')
+    predictor.predict_race_winners('2025-08-30')
+    predictor.predict_race_winners('2025-08-31')
  
  
 
