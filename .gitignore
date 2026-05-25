@@ -1,5 +1,6 @@
 .env
 .mcp.json
+_archive/
 __pycache__/
 *.pyc
 *.pkl
