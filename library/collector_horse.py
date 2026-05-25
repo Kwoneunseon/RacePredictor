@@ -3,25 +3,19 @@ import requests
 from datetime import datetime, date
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
-from supabase import create_client, Client
 
-from _const import API_KEY, SUPABASE_URL, SUPABASE_KEY  # config 파일 수정 필요
+from config import API_KEY
 from Utils import safe_int, safe_float
-
-# 로깅 설정
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Supabase 클라이언트 초기화
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+from Utils.database import upsert
+from Utils.logger import get_logger
+logger = get_logger(__name__)
 
 def calculate_age(birth_str: str):
     '''
-    생년월일 문자열을 받아서 나이를 계산하는 함수  
+    생년월일 문자열을 받아서 나이를 계산하는 함수
     :param birth_str: 생년월일 문자열 (형식: YYYYMMDD)
     :return: 나이 (정수)
-    ''' 
+    '''
     try:
         birth_date = datetime.strptime(str(birth_str), "%Y%m%d").date()
         today = date.today()
@@ -45,7 +39,7 @@ def fetch_horse_data(page=1, per_page=1000, options={}):
     try:
         endpoint = "https://apis.data.go.kr/B551015/API8_2/raceHorseInfo_2"
         response = requests.get(endpoint, params=params, timeout=30)
-        
+
         if response.status_code == 200:
             data = response.json()
             return data, page
@@ -66,7 +60,7 @@ def parse_horse_data(api_response):
     API 응답을 파싱하여 테이블 구조에 맞는 데이터로 변환
     """
     horses_data = []
-    
+
     try:
         if 'response' in api_response and 'body' in api_response['response']:
             items = api_response['response']['body']
@@ -74,23 +68,22 @@ def parse_horse_data(api_response):
                 items = items.get('items', [])
             if items:
                 items = items.get('item', [])
-                
+
                 if isinstance(items, dict):
                     items = [items]
-                    
+
                 for item in items:
                     horse_data = {
                         'horse_id': str(item.get('hrNo', 0)),  # TEXT 타입으로 변환
                         'name': item.get('hrName', ''),
                         'age': calculate_age(item.get('birthday', 0)),
                         'gender': item.get('sex', ''),
-                        'breed': item.get('name', 'Thoroughbred'),
                         'rank': item.get('rank', '')
                     }
                     horses_data.append(horse_data)
     except Exception as e:
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
-        
+
     return horses_data
 
 
@@ -100,14 +93,14 @@ def fetch_additional_horse_data(horse_id:str):
     '''
     params = {
         "serviceKey": API_KEY,
-        "hr_no": horse_id, 
+        "hr_no": horse_id,
         "_type": 'json',
         }
 
     try:
         endpoint = "https://apis.data.go.kr/B551015/API15_2/raceHorseResult_2"
         response = requests.get(endpoint, params=params, timeout=30)
-        
+
         if response.status_code == 200:
             data = response.json()
             return data
@@ -118,13 +111,13 @@ def fetch_additional_horse_data(horse_id:str):
     except Exception as e:
         logger.error(f"API 호출 중 오류 발생 - 말 ID {horse_id} {str(e)}")
         return None
-    
-    
+
+
 def parse_additional_horse_data(api_response):
     """
     API 응답을 파싱하여 테이블 구조에 맞는 데이터로 변환 (추가적인 정보)
     """
-    additional_data = {    
+    additional_data = {
         'total_races' : 0,
         'total_win_rate': 0.0,
         'total_place_rate': 0.0,
@@ -132,8 +125,8 @@ def parse_additional_horse_data(api_response):
         'year_win_rate': 0.0,
         'year_place_rate': 0.0
     }
-    
-    
+
+
     try:
         if 'response' in api_response and 'body' in api_response['response']:
             items = api_response['response']['body']
@@ -141,10 +134,10 @@ def parse_additional_horse_data(api_response):
                 items = items.get('items', [])
             if items:
                 items = items.get('item', [])
-                
+
                 if isinstance(items, dict):
                     items = [items]
-                    
+
                 for item in items:
                     additional_data['total_races'] = safe_int(item.get('rcCntT', 0))
                     additional_data['total_win_rate'] = safe_float(item.get('winRateT', 0.0))
@@ -156,127 +149,43 @@ def parse_additional_horse_data(api_response):
 
     except Exception as e:
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
-        
+
     return additional_data
 
 def combine_horse_data_with_details(horse_basic_data):
     '''기본 말 정보에 추가 정보들을 조합하는 함수'''
     combined_data = []
-    
+
     for horse in horse_basic_data:
         horse_id = horse['horse_id']
         logger.info(f"말 {horse_id}의 추가 정보 수집 중...")
-        
+
         # 기본 정보로 시작
         combined_horse = horse.copy()
-        
+
         # 경주 기록 정보 추가
         additional_data = fetch_additional_horse_data(horse_id)
         if additional_data:
             horse_additional_info = parse_additional_horse_data(additional_data)
             combined_horse.update(horse_additional_info)
-                
+
         combined_data.append(combined_horse)
 
         # API 호출 제한 방지
         time.sleep(0.2)
-    
+
     return combined_data
 
 
-def save_to_supabase_batch(horses_data, batch_size=500):
-    """
-    배치 단위로 Supabase DB에 저장 (upsert 버전 - 업데이트/삽입)
-    """
-    try:
-        if not horses_data:
-            logger.info("처리할 말 데이터가 없습니다.")
-            return True
-            
-        total_processed = 0
-        successful_batches = 0
-        
-        logger.info(f"{len(horses_data)}마리 말 정보 처리 시작 (upsert)...")
-        
-        # 배치 처리로 성능 개선
-        for i in range(0, len(horses_data), batch_size):
-            batch = horses_data[i:i + batch_size]
-            batch_num = i//batch_size + 1
-            
-            try:
-                # Supabase에 데이터 upsert (있으면 업데이트, 없으면 삽입)
-                result = supabase.table('horses').upsert(batch).execute()
-                total_processed += len(batch)
-                successful_batches += 1
-                logger.info(f"배치 {batch_num} 처리 완료: {len(batch)}마리 (누적: {total_processed}마리)")
-                
-                # API 호출 제한 방지를 위한 딜레이
-                time.sleep(0.2)
-                
-            except Exception as batch_error:
-                logger.error(f"배치 {batch_num} 저장 실패: {str(batch_error)}")
-                
-                # 개별 레코드로 재시도
-                logger.info(f"배치 {batch_num} 개별 저장으로 재시도...")
-                saved_individually = save_individually(batch)
-                total_processed += saved_individually
-        
-        logger.info(f"=== 말 정보 처리 완료 ===")
-        logger.info(f"총 처리된 레코드: {total_processed}마리")
-        logger.info(f"성공한 배치: {successful_batches}개")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Supabase 저장 중 오류 발생: {e}")
-        return False
-
-def save_individually(batch_data):
-    """
-    개별 레코드로 저장 (배치 실패 시 백업 방법)
-    """
-    saved_count = 0
-    logger.info(f"개별 저장 시작: {len(batch_data)}마리")
-    
-    for horse in batch_data:
-        try:
-            # 개별 저장 시에도 upsert 사용
-            result = supabase.table('horses').upsert(horse).execute()
-            saved_count += 1
-            
-            if saved_count % 50 == 0:  # 50마리마다 로그 출력
-                logger.info(f"개별 저장 진행: {saved_count}/{len(batch_data)}")
-                
-            time.sleep(0.05)  # 개별 저장 시 더 짧은 딜레이
-        except Exception as e:
-            logger.error(f"개별 저장 실패 - {horse.get('horse_id', 'Unknown')}: {str(e)}")
-    
-    logger.info(f"개별 저장 완료: {saved_count}마리")
-    return saved_count
-
-def check_existing_data():
-    """
-    기존 데이터 확인 함수 (개선된 버전)
-    """
-    try:
-        # 전체 레코드 수 확인
-        result = supabase.table('horses').select('horse_id', count='exact').execute()
-        count = result.count if hasattr(result, 'count') else len(result.data)
-        
-        logger.info(f"현재 DB에 저장된 말 정보: {count}마리")
-        
-        # 최근 데이터 몇 개 확인
-        recent_data = supabase.table('horses').select('horse_id, name, updated_at').order('updated_at', desc=True).limit(5).execute()
-        
-        if recent_data.data:
-            logger.info("최근 업데이트된 데이터:")
-            for horse in recent_data.data:
-                logger.info(f"  - {horse.get('horse_id')}: {horse.get('name')} ({horse.get('updated_at')})")
-        
-        return count
-    except Exception as e:
-        logger.error(f"기존 데이터 확인 실패: {str(e)}")
+def save_to_supabase_batch(horses: list) -> int:
+    if not horses:
         return 0
+    # Only keep columns that exist in the new schema
+    schema_keys = {"horse_id", "name", "age", "gender", "rank"}
+    rows = [{k: v for k, v in h.items() if k in schema_keys} for h in horses if h and h.get("horse_id")]
+    upsert("horses", rows, "horse_id")
+    return len(rows)
+
 
 def remove_duplicates_from_collected_data(horses_data):
     """
@@ -285,7 +194,7 @@ def remove_duplicates_from_collected_data(horses_data):
     seen_ids = set()
     unique_horses = []
     duplicate_in_batch = 0
-    
+
     for horse in horses_data:
         horse_id = horse.get('horse_id')
         if horse_id not in seen_ids:
@@ -293,10 +202,10 @@ def remove_duplicates_from_collected_data(horses_data):
             unique_horses.append(horse)
         else:
             duplicate_in_batch += 1
-    
+
     if duplicate_in_batch > 0:
         logger.info(f"수집 데이터 내 중복 제거: {duplicate_in_batch}건 제거, {len(unique_horses)}건 유지")
-    
+
     return unique_horses
 
 def fetch_page_data(page):
@@ -314,12 +223,12 @@ def fetch_pages_parallel(start_page=1, max_pages=100, max_workers=3):
     병렬로 여러 페이지의 데이터를 가져오기 (Supabase용으로 worker 수 감소)
     """
     all_horses_data = []
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         page_range = range(start_page, min(start_page + max_pages, 1000))
-        
+
         future_to_page = {executor.submit(fetch_page_data, page): page for page in page_range}
-        
+
         empty_pages = 0
         for future in as_completed(future_to_page):
             try:
@@ -331,14 +240,14 @@ def fetch_pages_parallel(start_page=1, max_pages=100, max_workers=3):
                 else:
                     empty_pages += 1
                     logger.info(f"페이지 {page_num}: 데이터 없음")
-                    
+
                 if empty_pages >= 10:
                     logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
                     break
-                    
+
             except Exception as e:
                 logger.error(f"페이지 처리 중 오류: {str(e)}")
-    
+
     return all_horses_data
 
 def fetch_pages_sequential(start_page=1, max_pages=50, options={}):
@@ -347,11 +256,11 @@ def fetch_pages_sequential(start_page=1, max_pages=50, options={}):
     """
     all_horses_data = []
     empty_pages = 0
-    
+
     for page in range(start_page, start_page + max_pages):
         try:
             api_data, _ = fetch_horse_data(page=page, options=options)
-            
+
             if api_data:
                 horses_data = parse_horse_data(api_data)
                 if horses_data:
@@ -361,17 +270,17 @@ def fetch_pages_sequential(start_page=1, max_pages=50, options={}):
                     empty_pages += 1
             else:
                 empty_pages += 1
-                
+
             if empty_pages >= 5:
                 logger.info("연속으로 빈 페이지가 많아 수집을 중단합니다.")
                 break
-                
+
             time.sleep(0.1)
-            
+
         except Exception as e:
             logger.error(f"페이지 {page} 처리 중 오류: {str(e)}")
             continue
-    
+
     return all_horses_data
 
 def collecting_horse_supabase(method='sequential', start_page=1, max_pages=50):
@@ -383,37 +292,28 @@ def collecting_horse_supabase(method='sequential', start_page=1, max_pages=50):
     """
     logger.info("경주마 정보 수집을 시작합니다 (upsert 버전 - 업데이트/삽입)...")
     logger.info(f"수집 방법: {method}, 시작 페이지: {start_page}, 최대 페이지: {max_pages}")
-    
-    # 기존 데이터 확인
-    initial_count = check_existing_data()
-    
+
     start_time = time.time()
-    
+
     # 데이터 수집 방법 선택
     if method == 'parallel':
         horses_data = fetch_pages_parallel(start_page=start_page, max_pages=max_pages, max_workers=2)
     else:
         horses_data = fetch_pages_sequential(start_page=start_page, max_pages=max_pages)
-    
+
     if not horses_data:
         logger.warning("수집된 데이터가 없습니다.")
-        return
-    
+        return 0
+
     logger.info(f"총 {len(horses_data)}마리의 말 정보를 수집했습니다.")
-    
+
     # 수집된 데이터 내에서 중복 제거
     horses_data = remove_duplicates_from_collected_data(horses_data)
-    
-    # upsert 사용으로 모든 데이터 처리 (기존 필터링 로직 제거)
-    if save_to_supabase_batch(horses_data, batch_size=300):
-        end_time = time.time()
-        logger.info(f"경주마 정보 수집 완료! 소요시간: {end_time - start_time:.2f}초")
-        
-        # 최종 데이터 확인
-        final_count = check_existing_data()
-        logger.info(f"데이터 처리 결과: 기존 {initial_count}마리 → 현재 {final_count}마리")
-    else:
-        logger.error("데이터 저장 실패")
+
+    saved = save_to_supabase_batch(horses_data)
+    end_time = time.time()
+    logger.info(f"경주마 정보 수집 완료! 소요시간: {end_time - start_time:.2f}초, 저장: {saved}마리")
+    return saved
 
 def fetch_single_horse_data(horse_id):
     """
@@ -426,45 +326,27 @@ def fetch_single_horse_data(horse_id):
     if not horse_data:
         logger.warning(f"말 ID {horse_id}에 대한 데이터가 없습니다.")
         return None
-    
+
     horse_data = horse_data[0]  # 단일 말 정보이므로 첫 번째 요소만 사용
 
     additional_data = fetch_additional_horse_data(horse_id)
     if additional_data:
         horse_additional_info = parse_additional_horse_data(additional_data)
-        horse_data.update(horse_additional_info)  
+        horse_data.update(horse_additional_info)
 
     return horse_data
 
-def update_single_horse(horse_id):
-    """
-    특정 말의 정보를 최신으로 업데이트
-    """
-    try:
-        logger.info(f"말 {horse_id} 정보 업데이트 중...")
-        
-        # API에서 최신 정보 가져오기
-        api_data, _ = fetch_single_horse_data(horse_id)
-        
-        if api_data:
-            horses_data = parse_horse_data(api_data)
-            if horses_data:
-                # upsert로 업데이트
-                result = supabase.table('horses').upsert(horses_data[0]).execute()
-                logger.info(f"말 {horse_id} 정보 업데이트 완료")
-                return True
-        
-        logger.warning(f"말 {horse_id} 정보를 찾을 수 없습니다.")
-        return False
-        
-    except Exception as e:
-        logger.error(f"말 {horse_id} 정보 업데이트 실패: {str(e)}")
-        return False
+def fetch_all_horses(start_page: int = 1, max_pages: int = 50) -> int:
+    horses = fetch_pages_sequential(start_page=start_page, max_pages=max_pages)
+    if not horses:
+        return 0
+    horses = remove_duplicates_from_collected_data(horses)
+    return save_to_supabase_batch(horses)
 
 # 실행 옵션들
 if __name__ == "__main__":
     # 말 정보 수집 (upsert 방식)
     #collecting_horse_supabase(method='sequential', start_page=1, max_pages=100)
-    
+
     # 특정 말 정보 업데이트 예시
     fetch_single_horse_data("0038052")
