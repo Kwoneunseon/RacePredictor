@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.pkl
+models/
+logs/
+catboost_info/
+race_results/
