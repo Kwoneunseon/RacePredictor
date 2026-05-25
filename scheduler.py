@@ -1,0 +1,89 @@
+from datetime import datetime
+from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+
+from library import collecting_race_results
+from Utils.database import get_client
+from Utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _get_today_str() -> str:
+    return datetime.now().strftime("%Y%m%d")
+
+
+def collect_task():
+    today = _get_today_str()
+    logger.info(f"데이터 수집 시작: {today}")
+
+    client = get_client()
+    log_row = {
+        "job_type": "collect",
+        "started_at": datetime.now().isoformat(),
+        "status": "running",
+    }
+    log_id = None
+    try:
+        log_res = client.table("scheduler_logs").insert(log_row).execute()
+        log_id = log_res.data[0]["id"] if log_res.data else None
+    except Exception:
+        pass
+
+    try:
+        collecting_race_results(
+            start_page=1,
+            max_pages=50,
+            start_date=today,
+            end_date=today,
+        )
+        status, error_msg = "success", None
+    except Exception as e:
+        status, error_msg = "error", str(e)
+        logger.error(f"수집 실패: {e}")
+
+    if log_id:
+        try:
+            client.table("scheduler_logs").update({
+                "finished_at": datetime.now().isoformat(),
+                "status": status,
+                "error_message": error_msg,
+            }).eq("id", log_id).execute()
+        except Exception:
+            pass
+
+    logger.info(f"데이터 수집 완료: {status}")
+
+
+def create_scheduler(background: bool = False):
+    Scheduler = BackgroundScheduler if background else BlockingScheduler
+    sched = Scheduler(timezone="Asia/Seoul")
+
+    sched.add_job(
+        collect_task,
+        trigger=IntervalTrigger(hours=1),
+        id="collect_race_data",
+        name="경주일 시간별 수집",
+        replace_existing=True,
+    )
+
+    sched.add_job(
+        collect_task,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=6, minute=0),
+        id="collect_weekday_data",
+        name="평일 1일 1회 수집",
+        replace_existing=True,
+    )
+
+    return sched
+
+
+if __name__ == "__main__":
+    logger.info("스케줄러 시작")
+    sched = create_scheduler(background=False)
+    try:
+        sched.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("스케줄러 종료")
