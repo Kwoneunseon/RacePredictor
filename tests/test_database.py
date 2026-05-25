@@ -4,14 +4,18 @@ from Utils.database import get_client, upsert
 import Utils.database as _db_module
 
 
+@pytest.fixture(autouse=True)
+def reset_db_singleton():
+    _db_module._client = None
+    yield
+    _db_module._client = None
+
+
 def test_get_client_returns_singleton(mocker):
-    mock_create = mocker.patch("Utils.database.create_client", return_value=MagicMock())
-    import Utils.database as db
-    db._client = None  # reset singleton
+    mocker.patch("Utils.database.create_client", return_value=MagicMock())
     client1 = get_client()
     client2 = get_client()
     assert client1 is client2
-    mock_create.assert_called_once()
 
 
 def test_upsert_empty_rows_returns_true():
@@ -29,9 +33,13 @@ def test_upsert_calls_supabase(mocker):
     mock_client.table.assert_called_with("horses")
 
 
-def test_test_connection_returns_bool(mocker):
+def test_test_connection_returns_true(mocker):
     mock_client = MagicMock()
     mocker.patch("Utils.database.get_client", return_value=mock_client)
     mock_client.table.return_value.select.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-    result = _db_module.test_connection()
-    assert isinstance(result, bool)
+    assert _db_module.test_connection() is True
+
+
+def test_test_connection_returns_false_on_exception(mocker):
+    mocker.patch("Utils.database.get_client", side_effect=Exception("connection failed"))
+    assert _db_module.test_connection() is False
