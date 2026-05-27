@@ -37,6 +37,14 @@ MODEL_CONFIG = {
     "performance_threshold": {"min_auc": 0.65},
 }
 
+BANKROLL = 100_000
+MAX_BET_FRACTION = 0.05
+KELLY_FRACTION = 0.25
+EV_THRESHOLD_SCRAPING = 0.10
+EV_THRESHOLD_FALLBACK = 0.25
+FILTER_DISTANCES = [1200, 1400]
+FILTER_MIN_HORSES = 5
+
 FEATURE_COLUMNS = [
     "horse_age", "is_male", "horse_class_enc", "race_distance", "total_horses",
     "horse_weight", "race_grade_enc", "track_condition_enc", "weather_enc",
