@@ -8,7 +8,6 @@ from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.predictor import RacePredictor
 from core.model_manager import ModelManager
-from core.investor import Investor
 
 logger = get_logger(__name__)
 
@@ -27,8 +26,36 @@ def cmd_train(args):
         logger.error("학습 데이터 없음")
         return
 
-    df = pd.DataFrame(result.data)
-    logger.info(f"학습 데이터: {len(df)}건")
+    rows = []
+    for r in result.data:
+        flat = {k: v for k, v in r.items() if not isinstance(v, dict)}
+
+        h = r.get("horses") or {}
+        flat["horse_age"] = h.get("age")
+        flat["gender"] = h.get("gender")
+        flat["horse_class"] = h.get("rank")
+
+        rc = r.get("races") or {}
+        flat["race_distance"] = rc.get("race_distance")
+        flat["total_horses"] = rc.get("total_horses")
+        flat["race_grade"] = rc.get("race_grade")
+        flat["track_condition"] = rc.get("track_condition")
+        flat["weather"] = rc.get("weather")
+
+        j = r.get("jockeys") or {}
+        flat["jockey_total_wins"] = j.get("total_wins", 0) or 0
+        flat["jockey_total_races"] = j.get("total_races", 0) or 0
+
+        t = r.get("trainers") or {}
+        flat["trainer_total_wins"] = t.get("ord1_cnt_t", 0) or 0
+        flat["trainer_total_races"] = t.get("rc_cnt_t", 0) or 0
+
+        rows.append(flat)
+
+    df = pd.DataFrame(rows)
+    before = len(df)
+    df = df.dropna(subset=["horse_age", "race_distance"])
+    logger.info(f"학습 데이터: {len(df)}건 (피처 없는 {before - len(df)}건 제외)")
 
     preprocessor = RacePreprocessor()
     df_processed = preprocessor.fit_transform(df)
@@ -52,6 +79,10 @@ def cmd_predict(args):
         logger.error("로드할 모델 없음. 먼저 --mode train 실행")
         return
 
+    from core.race_filter import RaceFilter
+    from core.investor import Investor
+    from Utils.database import get_client
+
     predictor = RacePredictor(trainer, preprocessor)
     predictions = predictor.predict_from_db(args.date, meet_code=args.meet)
 
@@ -59,19 +90,59 @@ def cmd_predict(args):
         logger.warning(f"{args.date} 예측 결과 없음")
         return
 
-    print("\n=== 예측 결과 ===")
-    for _, row in predictions.head(3).iterrows():
-        print(f"  {int(row['predicted_rank'])}위 예측: "
-              f"{row.get('horse_name', row.get('horse_id', '?'))} "
-              f"(확률: {row['win_probability']:.3f})")
+    # 경주 필터 적용 (거리 1200/1400m, 일반 경주, 5두 이상)
+    race_filter = RaceFilter()
+    client = get_client()
+    races_res = client.table("races")\
+        .select("race_id, race_distance, race_grade, total_horses, race_no, meet_code")\
+        .eq("race_date", args.date)\
+        .execute()
+    race_info = {r["race_id"]: r for r in (races_res.data or [])}
+    eligible_ids = {rid for rid, info in race_info.items() if race_filter.is_eligible(info)}
 
-    investor = Investor(threshold=0.6, bet_amount=1000)
-    bets = investor.decide(predictions)
-    if not bets.empty:
-        print(f"\n베팅 추천: {len(bets)}건")
-        for _, bet in bets.iterrows():
-            print(f"  → {bet.get('horse_name', bet.get('horse_id', '?'))} "
-                  f"(확률: {bet['win_probability']:.3f})")
+    filtered = predictions[predictions["race_id"].isin(eligible_ids)].copy()
+    total_races = predictions["race_id"].nunique()
+    logger.info(f"경주 필터: {len(eligible_ids)}/{total_races}경주 통과")
+
+    MEET_NAME = {1: "서울", 2: "제주", 3: "부산", 0: "미상"}
+
+    def race_label(race_id):
+        info = race_info.get(race_id, {})
+        meet = MEET_NAME.get(info.get("meet_code"), "미상")
+        race_no = info.get("race_no", "?")
+        return f"[{meet} {race_no}경주]"
+
+    print(f"\n=== 예측 결과 ({args.date}) ===")
+    print(f"필터 통과: {len(eligible_ids)}/{total_races}경주 (1200/1400m·일반·5두 이상)\n")
+
+    all_groups = predictions.groupby("race_id", sort=False)
+    for race_id, group in sorted(all_groups, key=lambda x: (
+        race_info.get(x[0], {}).get("meet_code", 0),
+        race_info.get(x[0], {}).get("race_no", 0),
+    )):
+        top = group.sort_values("win_probability", ascending=False).iloc[0]
+        label = race_label(race_id)
+        name = top.get("horse_name") or top.get("horse_id", "?")
+        prob = top["win_probability"]
+        eligible_mark = "" if race_id in eligible_ids else " [필터 제외]"
+        print(f"  {label} 1위 예측: {name} (확률: {prob:.3f}){eligible_mark}")
+
+    # EV 기반 베팅 결정 (필터 통과 경주만)
+    meet_code = args.meet if args.meet is not None else 1
+    investor = Investor()
+    decisions = investor.decide(filtered, args.date, meet_code)
+
+    print()
+    if decisions:
+        print(f"베팅 추천: {len(decisions)}경주")
+        for d in decisions:
+            label = race_label(d["race_id"])
+            print(
+                f"  {label} → {d['horse_name']} | {d['bet_type']} {d['amount']:,}원 "
+                f"(EV={d['ev']:+.2f}, 확률={d['model_prob']:.3f}, 배당={d['odds']:.1f}배, 출처={d['source']})"
+            )
+    else:
+        print("베팅 추천: 없음 (EV 기준 미달)")
 
 
 def cmd_status(args):
