@@ -41,6 +41,35 @@ class RacePredictor:
             logger.warning(f"{race_date} 출전 데이터 없음")
             return pd.DataFrame()
 
-        df = pd.DataFrame(result.data)
+        rows = []
+        for r in result.data:
+            flat = {k: v for k, v in r.items() if not isinstance(v, dict)}
+
+            h = r.get("horses") or {}
+            flat["horse_name"] = h.get("name")
+            flat["horse_age"] = h.get("age")
+            flat["gender"] = h.get("gender")
+            flat["horse_class"] = h.get("rank")
+
+            rc = r.get("races") or {}
+            flat["race_no"] = rc.get("race_no")
+            flat["meet_code"] = rc.get("meet_code")
+            flat["race_distance"] = rc.get("race_distance")
+            flat["total_horses"] = rc.get("total_horses")
+            flat["race_grade"] = rc.get("race_grade")
+            flat["track_condition"] = rc.get("track_condition")
+            flat["weather"] = rc.get("weather")
+
+            j = r.get("jockeys") or {}
+            flat["jockey_total_wins"] = j.get("total_wins", 0) or 0
+            flat["jockey_total_races"] = j.get("total_races", 0) or 0
+
+            t = r.get("trainers") or {}
+            flat["trainer_total_wins"] = t.get("ord1_cnt_t", 0) or 0
+            flat["trainer_total_races"] = t.get("rc_cnt_t", 0) or 0
+
+            rows.append(flat)
+
+        df = pd.DataFrame(rows)
         df = self.preprocessor.transform(df)
         return self.predict(df)

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import calendar
 import requests
 from datetime import datetime
 import time
@@ -12,6 +13,16 @@ from .collector_jockeys import fetch_single_jockey_data as jockey_fetch_page, sa
 from .collector_trainers import fetch_single_trainer_data as trainer_fetch_page, save_to_supabase_batch as save_trainer_data, parse_trainer_data
 
 logger = get_logger(__name__)
+
+MEET_CODE_MAP = {'서울': 1, '제주': 2, '부산': 3, '부산경남': 3}
+TABLES_WITHOUT_UPDATED_AT = {'races', 'race_entries'}
+
+# 경마장별 전용 API 엔드포인트
+MEET_RACE_ENDPOINTS = {
+    1: "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",   # 서울
+    2: "https://apis.data.go.kr/B551015/API4_2/raceResult_2",    # 제주
+    3: "http://apis.data.go.kr/B551015/API4_3/raceResult_3",     # 부산경남
+}
 
 # HTTP 요청 로그 숨기기
 import logging
@@ -52,35 +63,63 @@ def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
         logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
         return None, page
 
-def fetch_race_data_all(page=1, per_page=1000 ,meet_code = 2, start_date=None, end_date=None):
-    """경주 결과 API에서 데이터 가져오는 함수"""
-    params = {
-        "serviceKey": API_KEY,
-        "pageNo": page,
-        "numOfRows": per_page,
-        "meet": meet_code,
-        "rc_month": end_date[:6],  # 종료일
-        "_type": 'json'
+def fetch_race_data_all(page=1, per_page=1000, meet_code=2, start_date=None, end_date=None):
+    """경마장별 전용 엔드포인트로 경주 결과를 가져오는 함수.
 
-    }
+    서울(1): SeoulRace_1 → rc_date_fr / rc_date_to (YYYYMMDD)
+    제주(2): raceResult_2 → rc_month (YYYYMM)
+    부산경남(3): raceResult_3 → rc_month (YYYYMM)
+    """
+    endpoint = MEET_RACE_ENDPOINTS.get(meet_code, MEET_RACE_ENDPOINTS[3])
+
+    if meet_code == 1:
+        # 서울 API: rc_date_to / rc_date_fr 방식
+        # end_date가 YYYYMM(6자리)이면 해당 월의 1일~말일로 변환
+        end_str = str(end_date) if end_date else datetime.now().strftime('%Y%m%d')
+        if len(end_str) == 6:
+            year, month = int(end_str[:4]), int(end_str[4:6])
+            last_day = calendar.monthrange(year, month)[1]
+            rc_date_to = f"{end_str}{last_day:02d}"
+            rc_date_fr = f"{end_str}01"
+        else:
+            rc_date_to = end_str
+            rc_date_fr = start_date
+
+        params = {
+            "serviceKey": API_KEY,
+            "pageNo": page,
+            "numOfRows": per_page,
+            "rc_date_to": rc_date_to,
+            "_type": "json",
+        }
+        if rc_date_fr:
+            params["rc_date_fr"] = rc_date_fr
+    else:
+        # 제주·부산경남 API: rc_month 방식
+        rc_month = str(end_date)[:6] if end_date else datetime.now().strftime('%Y%m')
+        params = {
+            "serviceKey": API_KEY,
+            "pageNo": page,
+            "numOfRows": per_page,
+            "rc_month": rc_month,
+            "_type": "json",
+        }
 
     try:
-        endpoint = "http://apis.data.go.kr/B551015/API4_3/raceResult_3"
         response = requests.get(endpoint, params=params, timeout=30)
 
         if response.status_code == 200:
-            data = response.json()
-            return data, page
+            return response.json(), page
         elif response.status_code == 429:
-            logger.warning(f"API 호출 제한 - 페이지 {page}, 5초 대기 후 재시도")
+            logger.warning(f"API 호출 제한 - 경마장{meet_code} 페이지 {page}, 5초 대기 후 재시도")
             time.sleep(5)
-            return fetch_race_data_all(page, per_page, start_date, end_date)
+            return fetch_race_data_all(page, per_page, meet_code, start_date, end_date)
         else:
-            logger.error(f"API 호출 실패 - 페이지 {page}: {response.status_code}")
+            logger.error(f"API 호출 실패 - 경마장{meet_code} 페이지 {page}: {response.status_code}")
             return None, page
 
     except Exception as e:
-        logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
+        logger.error(f"API 호출 중 오류 발생 - 경마장{meet_code} 페이지 {page}: {str(e)}")
         return None, page
 
 def get_existing_master_data():
@@ -150,10 +189,14 @@ def save_missing_master_data(missing_data):
             horse_datas=[]
             logger.info(f"새로운 말 {len(missing_data['horses'])}마리 추가")
             for batch_start in range(0, len(missing_data['horses'])):
-                horse_id = missing_data['horses'][batch_start]['horse_id']
+                entry = missing_data['horses'][batch_start]
+                horse_id = entry['horse_id']
                 horse_data = horse_fetch_page(horse_id)
                 if horse_data:
                     horse_datas.append(horse_data)
+                else:
+                    # API에 데이터 없어도 최소 레코드 저장 (race_entries FK 제약 충족)
+                    horse_datas.append({'horse_id': horse_id, 'name': entry.get('name', f'Horse_{horse_id}')})
             save_horse_data(horse_datas)
             saved_counts['horses'] = len(missing_data['horses'])
         else:
@@ -244,7 +287,8 @@ def parse_and_normalize_race_data(api_response):
 
                 for item in items:
                     race_date = parse_date(item.get('rcDate')) #경마일자
-                    meet_code = safe_str(item.get('meet'))  #경마장 명
+                    meet_str = safe_str(item.get('meet'))  #경마장 명 (한글)
+                    meet_code = MEET_CODE_MAP.get(meet_str, 0)  #경마장 코드 (정수)
                     race_no = safe_int(item.get('rcNo'))    #경주 번호
                     horse_id = safe_str(item.get('hrno')) if item.get('hrno') else safe_str(item.get('hrNo'))  #마번
 
@@ -257,17 +301,17 @@ def parse_and_normalize_race_data(api_response):
                     owner_name = safe_str(item.get('prowName')) if item.get('prowName') else safe_str(item.get('owName'))
                     horse_name = safe_str(item.get('hrName')) if item.get('hrName') else safe_str(item.get('trName'))
 
-                    if not all([race_date, meet_code, race_no, horse_id, jk_no, trainer_id, owner_id]):
+                    if not all([race_date, meet_str, race_no, horse_id, jk_no, trainer_id, owner_id]):
                         continue
 
                     # 경주 기본 정보 (new schema: race_id is composite key string)
-                    race_key = (race_date, meet_code, race_no)
-                    race_id = f"{race_date}_{meet_code}_{race_no}"
+                    race_key = (race_date, meet_str, race_no)
+                    race_id = f"{race_date}_{meet_str}_{race_no}"
                     if race_key not in processed_races:
                         races.append({
                             'race_id': race_id,
                             'race_date': race_date,
-                            'meet_code': safe_int(meet_code),
+                            'meet_code': meet_code,
                             'race_no': race_no,
                             'race_distance': safe_int(item.get('rcDist')),  #경주거리
                             'race_grade': safe_str(item.get('rcGrade')) if item.get('rcGrade') else safe_str(item.get('rcName')), #경주등급
@@ -437,11 +481,12 @@ def save_table_data(table_name, data, batch_size=200):
             batch_num = i // batch_size + 1
 
             try:
-                # 각 배치에 타임스탬프 추가
-                current_time = datetime.now().isoformat()
-                for record in batch:
-                    if 'updated_at' not in record:
-                        record['updated_at'] = current_time
+                # updated_at 컬럼이 있는 테이블만 타임스탬프 추가
+                if table_name not in TABLES_WITHOUT_UPDATED_AT:
+                    current_time = datetime.now().isoformat()
+                    for record in batch:
+                        if 'updated_at' not in record:
+                            record['updated_at'] = current_time
 
                 # Supabase에 데이터 삽입 (upsert 사용)
                 result = supabase.table(table_name).upsert(batch).execute()
@@ -477,7 +522,8 @@ def save_individual_records(table_name, records):
 
     for record in records:
         try:
-            record['updated_at'] = datetime.now().isoformat()
+            if table_name not in TABLES_WITHOUT_UPDATED_AT:
+                record['updated_at'] = datetime.now().isoformat()
             supabase.table(table_name).upsert(record).execute()
             saved_count += 1
 
