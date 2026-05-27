@@ -26,6 +26,8 @@ class Investor:
         odds_map = self.odds_collector.get_odds(race_date, meet_code)
         decisions = []
 
+        KRA_PAYOUT_RATE = 0.75  # KRA 환급률 75%
+
         race_groups = predictions.groupby("race_id", sort=False)
         for race_id, group in race_groups:
             race_odds = odds_map.get(race_id, {})
@@ -34,11 +36,20 @@ class Investor:
             top = group.sort_values("win_probability", ascending=False).iloc[0]
             horse_id = top.get("horse_id")
             model_prob = float(top["win_probability"])
-            odds = float(race_odds.get(horse_id, 0))
 
-            if odds <= 0:
-                logger.debug(f"{race_id}: 배당 없음, 스킵")
-                continue
+            if source == "fallback":
+                # 경주 내 상대 확률로 배당 추정: est_odds = (sum_probs / model_prob) * KRA_PAYOUT_RATE
+                # 모든 말의 확률 합이 클수록(모델이 특정 말을 강하게 선택) EV가 높아짐
+                sum_probs = float(group["win_probability"].fillna(0).sum())
+                if sum_probs <= 0 or model_prob <= 0:
+                    logger.debug(f"{race_id}: 확률 계산 불가, 스킵")
+                    continue
+                odds = (sum_probs / model_prob) * KRA_PAYOUT_RATE
+            else:
+                odds = float(race_odds.get(horse_id, 0))
+                if odds <= 0:
+                    logger.debug(f"{race_id}: 배당 없음, 스킵")
+                    continue
 
             rec = self.ev_calc.recommend(model_prob, odds, self.bankroll, source)
             if rec is None:
