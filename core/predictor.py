@@ -72,6 +72,30 @@ class RacePredictor:
 
         df = pd.DataFrame(rows)
 
+        # jockey/trainer 최근 30일 승률 계산
+        if "jk_no" in df.columns:
+            import pandas as _pd
+            cutoff = (_pd.to_datetime(race_date) - _pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+            hist_30d_res = client.table("race_entries")\
+                .select("jk_no, trainer_id, final_rank")\
+                .gte("race_date", cutoff)\
+                .lt("race_date", race_date)\
+                .not_.is_("final_rank", "null")\
+                .execute()
+            if hist_30d_res.data:
+                hist_30d = _pd.DataFrame(hist_30d_res.data)
+                hist_30d["_is_win"] = (hist_30d["final_rank"] == 1).astype(int)
+                jk_rates = hist_30d.groupby("jk_no")["_is_win"].mean().to_dict()
+                df["jockey_recent_win_rate"] = df["jk_no"].map(jk_rates).fillna(0.0)
+                if "trainer_id" in df.columns:
+                    tr_rates = hist_30d.groupby("trainer_id")["_is_win"].mean().to_dict()
+                    df["trainer_recent_win_rate"] = df["trainer_id"].map(tr_rates).fillna(0.0)
+                else:
+                    df["trainer_recent_win_rate"] = 0.0
+            else:
+                df["jockey_recent_win_rate"] = 0.0
+                df["trainer_recent_win_rate"] = 0.0
+
         # horse_race_history 조인: 해당 날짜 이하의 가장 최신 통계
         horse_ids = df["horse_id"].dropna().unique().tolist()
         if horse_ids:

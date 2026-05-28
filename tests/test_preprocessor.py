@@ -170,6 +170,49 @@ def test_preprocessor_race_relative_vs_mean(sample_df):
     assert h1["implied_prob_vs_mean"] < 1.0
 
 
+def test_preprocessor_rolling_recent_win_rate():
+    """fit_transform에서 jockey_recent_win_rate가 30일 이내 과거 레이스 기반으로 계산됨."""
+    df = pd.DataFrame({
+        "horse_id": ["H1", "H2", "H3"],
+        "race_id": ["R1", "R2", "R3"],
+        "race_date": ["2025-01-05", "2025-01-10", "2025-02-20"],
+        "final_rank": [1, 2, 1],
+        "horse_age": [4, 4, 4],
+        "gender": ["수컷", "수컷", "수컷"],
+        "horse_class": ["국5", "국5", "국5"],
+        "race_distance": [1200, 1200, 1200],
+        "total_horses": [8, 8, 8],
+        "horse_weight": [480, 480, 480],
+        "race_grade": ["일반", "일반", "일반"],
+        "track_condition": ["양호", "양호", "양호"],
+        "weather": ["맑음", "맑음", "맑음"],
+        "win_odds": [5.0, 5.0, 5.0],
+        "jk_no": ["J1", "J1", "J1"],
+        "trainer_id": ["T1", "T1", "T1"],
+    })
+    p = RacePreprocessor()
+    result = p.fit_transform(df)
+    assert "jockey_recent_win_rate" in result.columns
+    assert "trainer_recent_win_rate" in result.columns
+    # R1(Jan 05): J1의 과거 30일 내 레이스 없음 → 0.0
+    r1 = result[result["race_id"] == "R1"].iloc[0]
+    assert r1["jockey_recent_win_rate"] == pytest.approx(0.0)
+    # R2(Jan 10): J1의 과거 30일 → R1(Jan05, 1위) 1레이스 1승 → 1.0
+    r2 = result[result["race_id"] == "R2"].iloc[0]
+    assert r2["jockey_recent_win_rate"] == pytest.approx(1.0)
+    # R3(Feb 20): R1(Jan05)은 30일 밖, R2(Jan10)은 30일 밖 → 0.0
+    r3 = result[result["race_id"] == "R3"].iloc[0]
+    assert r3["jockey_recent_win_rate"] == pytest.approx(0.0)
+
+
+def test_preprocessor_rolling_missing_columns(sample_df):
+    """jk_no 없으면 jockey_recent_win_rate는 0으로 채워짐."""
+    p = RacePreprocessor()
+    result = p.fit_transform(sample_df)  # sample_df에는 jk_no 없음
+    assert "jockey_recent_win_rate" in result.columns
+    assert (result["jockey_recent_win_rate"] == 0.0).all()
+
+
 def test_preprocessor_race_relative_no_race_id():
     """race_id 없는 df에서 상대 특성은 기본값(0 or 1)으로 채워짐."""
     df = pd.DataFrame({

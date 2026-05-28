@@ -18,6 +18,7 @@ class RacePreprocessor:
         df = df.copy()
         df = self._add_target(df)
         df = self._add_derived_features(df)
+        df = self._add_rolling_recent_rates(df)
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=True)
         self._fitted = True
@@ -26,6 +27,10 @@ class RacePreprocessor:
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df = self._add_derived_features(df)
+        if "jockey_recent_win_rate" not in df.columns:
+            df["jockey_recent_win_rate"] = 0.0
+        if "trainer_recent_win_rate" not in df.columns:
+            df["trainer_recent_win_rate"] = 0.0
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=False)
         return df
@@ -67,6 +72,40 @@ class RacePreprocessor:
         df["win_odds"]     = win_odds
         df["implied_prob"] = 1.0 / win_odds.clip(lower=1.01)
 
+        return df
+
+    def _add_rolling_recent_rates(self, df: pd.DataFrame) -> pd.DataFrame:
+        needed = ["race_date", "jk_no", "final_rank"]
+        if not all(c in df.columns for c in needed):
+            df["jockey_recent_win_rate"] = 0.0
+            df["trainer_recent_win_rate"] = 0.0
+            return df
+
+        df = df.copy()
+        df["_rdt"] = pd.to_datetime(df["race_date"])
+        df["_is_win"] = (df["final_rank"] == 1).astype(float)
+
+        def _rolling_rate(id_col):
+            rates = pd.Series(0.0, index=df.index)
+            for gid, grp in df.groupby(id_col):
+                grp = grp.sort_values("_rdt")
+                dates = grp["_rdt"].values
+                wins = grp["_is_win"].values
+                vals = []
+                for i in range(len(wins)):
+                    cutoff = dates[i] - np.timedelta64(30, "D")
+                    past = wins[:i][dates[:i] >= cutoff]
+                    vals.append(float(past.mean()) if len(past) > 0 else 0.0)
+                rates[grp.index] = vals
+            return rates
+
+        df["jockey_recent_win_rate"] = _rolling_rate("jk_no")
+        if "trainer_id" in df.columns:
+            df["trainer_recent_win_rate"] = _rolling_rate("trainer_id")
+        else:
+            df["trainer_recent_win_rate"] = 0.0
+
+        df = df.drop(columns=["_rdt", "_is_win"])
         return df
 
     def _add_race_relative_features(self, df: pd.DataFrame) -> pd.DataFrame:

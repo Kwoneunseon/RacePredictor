@@ -54,4 +54,5 @@ FEATURE_COLUMNS = [
     "win_odds", "implied_prob",
     "race_implied_prob_rank", "implied_prob_vs_mean",
     "horse_class_vs_mean", "win_rate_vs_mean",
+    "jockey_recent_win_rate", "trainer_recent_win_rate",
 ]
