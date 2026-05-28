@@ -71,5 +71,22 @@ class RacePredictor:
             rows.append(flat)
 
         df = pd.DataFrame(rows)
+
+        # horse_race_history 조인: 해당 날짜 이하의 가장 최신 통계
+        horse_ids = df["horse_id"].dropna().unique().tolist()
+        if horse_ids:
+            hist_res = client.table("horse_race_history").select(
+                "horse_id, as_of_date, prev_total_races, prev_wins, prev_top3, prev_5_avg_rank, prev_total_avg_rank"
+            ).in_("horse_id", horse_ids).lte("as_of_date", race_date).execute()
+
+            if hist_res.data:
+                hist_df = pd.DataFrame(hist_res.data)
+                hist_latest = (
+                    hist_df.sort_values("as_of_date", ascending=False)
+                           .drop_duplicates(subset=["horse_id"], keep="first")
+                           .drop(columns=["as_of_date"])
+                )
+                df = df.merge(hist_latest, on="horse_id", how="left")
+
         df = self.preprocessor.transform(df)
         return self.predict(df)
