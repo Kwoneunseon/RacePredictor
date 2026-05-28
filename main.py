@@ -53,6 +53,30 @@ def cmd_train(args):
         rows.append(flat)
 
     df = pd.DataFrame(rows)
+
+    # horse_race_history 일괄 조인 (페이지네이션으로 전체 수집)
+    all_hist = []
+    page_size = 1000
+    offset = 0
+    while True:
+        hist_res = client.table("horse_race_history").select(
+            "horse_id, as_of_date, prev_total_races, prev_wins, prev_top3, prev_5_avg_rank, prev_total_avg_rank"
+        ).gte("as_of_date", args.start_date).lte("as_of_date", args.end_date)\
+            .range(offset, offset + page_size - 1).execute()
+        if not hist_res.data:
+            break
+        all_hist.extend(hist_res.data)
+        if len(hist_res.data) < page_size:
+            break
+        offset += page_size
+
+    if all_hist:
+        hist_df = pd.DataFrame(all_hist).rename(columns={"as_of_date": "race_date"})
+        df = df.merge(hist_df, on=["horse_id", "race_date"], how="left")
+        logger.info(f"horse_race_history 조인 완료: {len(all_hist)}개 행")
+    else:
+        logger.warning("horse_race_history 비어있음 – Task 1 SQL을 먼저 실행하세요")
+
     before = len(df)
     df = df.dropna(subset=["horse_age", "race_distance"])
     logger.info(f"학습 데이터: {len(df)}건 (피처 없는 {before - len(df)}건 제외)")
