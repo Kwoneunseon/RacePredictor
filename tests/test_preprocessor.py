@@ -140,3 +140,53 @@ def test_preprocessor_win_rate_range(sample_df):
     result = p.fit_transform(sample_df)
     assert (result["jockey_win_rate"] >= 0).all()
     assert (result["jockey_win_rate"] <= 1).all()
+
+
+def test_preprocessor_race_relative_features_columns(sample_df):
+    p = RacePreprocessor()
+    result = p.fit_transform(sample_df)
+    for col in ["race_implied_prob_rank", "implied_prob_vs_mean",
+                "horse_class_vs_mean", "win_rate_vs_mean"]:
+        assert col in result.columns, f"{col} 컬럼 없음"
+
+
+def test_preprocessor_race_relative_rank(sample_df):
+    """implied_prob 내림차순 순위: H2(odds=3.5→높은확률)=1위, H1(odds=8.0)=2위."""
+    p = RacePreprocessor()
+    result = p.fit_transform(sample_df)
+    # Find rows by original index (fit_transform does not sort)
+    h1 = result[result["horse_id"] == "H1"].iloc[0]
+    h2 = result[result["horse_id"] == "H2"].iloc[0]
+    assert h2["race_implied_prob_rank"] < h1["race_implied_prob_rank"]
+
+
+def test_preprocessor_race_relative_vs_mean(sample_df):
+    """implied_prob_vs_mean: 배당 낮은 말(H2)은 > 1, 높은 말(H1)은 < 1."""
+    p = RacePreprocessor()
+    result = p.fit_transform(sample_df)
+    h1 = result[result["horse_id"] == "H1"].iloc[0]
+    h2 = result[result["horse_id"] == "H2"].iloc[0]
+    assert h2["implied_prob_vs_mean"] > 1.0
+    assert h1["implied_prob_vs_mean"] < 1.0
+
+
+def test_preprocessor_race_relative_no_race_id():
+    """race_id 없는 df에서 상대 특성은 기본값(0 or 1)으로 채워짐."""
+    df = pd.DataFrame({
+        "horse_id": ["H1"],
+        "race_date": ["2025-01-01"],
+        "final_rank": [1],
+        "horse_age": [4],
+        "gender": ["수컷"],
+        "horse_class": ["국5"],
+        "race_distance": [1200],
+        "total_horses": [8],
+        "horse_weight": [480],
+        "race_grade": ["일반"],
+        "track_condition": ["양호"],
+        "weather": ["맑음"],
+        "win_odds": [5.0],
+    })
+    p = RacePreprocessor()
+    result = p.fit_transform(df)
+    assert "race_implied_prob_rank" in result.columns

@@ -18,6 +18,7 @@ class RacePreprocessor:
         df = df.copy()
         df = self._add_target(df)
         df = self._add_derived_features(df)
+        df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=True)
         self._fitted = True
         return df
@@ -25,6 +26,7 @@ class RacePreprocessor:
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df = self._add_derived_features(df)
+        df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=False)
         return df
 
@@ -65,6 +67,21 @@ class RacePreprocessor:
         df["win_odds"]     = win_odds
         df["implied_prob"] = 1.0 / win_odds.clip(lower=1.01)
 
+        return df
+
+    def _add_race_relative_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "race_id" not in df.columns:
+            df["race_implied_prob_rank"] = 1
+            df["implied_prob_vs_mean"] = 1.0
+            df["horse_class_vs_mean"] = 0.0
+            df["win_rate_vs_mean"] = 0.0
+            return df
+
+        grp = df.groupby("race_id")
+        df["race_implied_prob_rank"] = grp["implied_prob"].rank(ascending=False, method="min")
+        df["implied_prob_vs_mean"] = df["implied_prob"] / grp["implied_prob"].transform("mean").clip(lower=1e-6)
+        df["horse_class_vs_mean"] = grp["horse_class_num"].transform("mean") - df["horse_class_num"]
+        df["win_rate_vs_mean"] = df["horse_win_rate"] - grp["horse_win_rate"].transform("mean")
         return df
 
     def _encode_categoricals(self, df: pd.DataFrame, fit: bool) -> pd.DataFrame:

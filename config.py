@@ -52,4 +52,6 @@ FEATURE_COLUMNS = [
     "jockey_win_rate", "trainer_win_rate", "horse_win_rate",
     "horse_top3_rate", "experience_score", "recent_form",
     "win_odds", "implied_prob",
+    "race_implied_prob_rank", "implied_prob_vs_mean",
+    "horse_class_vs_mean", "win_rate_vs_mean",
 ]
