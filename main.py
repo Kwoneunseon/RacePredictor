@@ -17,17 +17,30 @@ def cmd_train(args):
     import pandas as pd
     client = get_client()
 
-    result = client.table("race_entries").select(
-        "*, horses(*), races(*), jockeys(*), trainers(*)"
-    ).gte("race_date", args.start_date).lte("race_date", args.end_date)\
-        .not_.is_("final_rank", "null").execute()
+    all_entries = []
+    page_size = 1000
+    offset = 0
+    while True:
+        result = client.table("race_entries").select(
+            "*, horses(*), races(*), jockeys(*), trainers(*)"
+        ).gte("race_date", args.start_date).lte("race_date", args.end_date)\
+            .not_.is_("final_rank", "null")\
+            .order("id")\
+            .range(offset, offset + page_size - 1).execute()
+        if not result.data:
+            break
+        all_entries.extend(result.data)
+        if len(result.data) < page_size:
+            break
+        offset += page_size
 
-    if not result.data:
+    if not all_entries:
         logger.error("학습 데이터 없음")
         return
+    logger.info(f"race_entries 수집: {len(all_entries)}건")
 
     rows = []
-    for r in result.data:
+    for r in all_entries:
         flat = {k: v for k, v in r.items() if not isinstance(v, dict)}
 
         h = r.get("horses") or {}
@@ -62,6 +75,7 @@ def cmd_train(args):
         hist_res = client.table("horse_race_history").select(
             "horse_id, as_of_date, prev_total_races, prev_wins, prev_top3, prev_5_avg_rank, prev_total_avg_rank"
         ).gte("as_of_date", args.start_date).lte("as_of_date", args.end_date)\
+            .order("horse_id").order("as_of_date")\
             .range(offset, offset + page_size - 1).execute()
         if not hist_res.data:
             break
@@ -72,6 +86,7 @@ def cmd_train(args):
 
     if all_hist:
         hist_df = pd.DataFrame(all_hist).rename(columns={"as_of_date": "race_date"})
+        hist_df = hist_df.drop_duplicates(subset=["horse_id", "race_date"])
         df = df.merge(hist_df, on=["horse_id", "race_date"], how="left")
         logger.info(f"horse_race_history 조인 완료: {len(all_hist)}개 행")
     else:
