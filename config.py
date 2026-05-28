@@ -46,9 +46,10 @@ FILTER_DISTANCES = [1200, 1400]
 FILTER_MIN_HORSES = 5
 
 FEATURE_COLUMNS = [
-    "horse_age", "is_male", "horse_class_enc", "race_distance", "total_horses",
+    "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
     "horse_weight", "race_grade_enc", "track_condition_enc", "weather_enc",
     "prev_total_races", "prev_5_avg_rank", "prev_total_avg_rank",
     "jockey_win_rate", "trainer_win_rate", "horse_win_rate",
     "horse_top3_rate", "experience_score", "recent_form",
+    "win_odds", "implied_prob",
 ]
