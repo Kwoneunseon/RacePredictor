@@ -19,6 +19,8 @@ class RacePreprocessor:
         df = self._add_target(df)
         df = self._add_derived_features(df)
         df = self._add_rolling_recent_rates(df)
+        if "training_grade_enc" not in df.columns:
+            df["training_grade_enc"] = 0.0
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=True)
         self._fitted = True
@@ -31,6 +33,8 @@ class RacePreprocessor:
             df["jockey_recent_win_rate"] = 0.0
         if "trainer_recent_win_rate" not in df.columns:
             df["trainer_recent_win_rate"] = 0.0
+        if "training_grade_enc" not in df.columns:
+            df["training_grade_enc"] = 0.0
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=False)
         return df

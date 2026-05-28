@@ -96,6 +96,25 @@ class RacePredictor:
                 df["jockey_recent_win_rate"] = 0.0
                 df["trainer_recent_win_rate"] = 0.0
 
+        # 조교현황 training_grade_enc 주입 (horse_training_sessions 테이블)
+        if "horse_name" in df.columns:
+            horse_names = df["horse_name"].dropna().unique().tolist()
+            race_dt = pd.to_datetime(race_date)
+            cutoff_tr = (race_dt - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+            tr_res = client.table("horse_training_sessions")\
+                .select("hrnm, remk_txt")\
+                .in_("hrnm", horse_names)\
+                .gte("trng_dt", cutoff_tr)\
+                .lt("trng_dt", race_date)\
+                .execute()
+            if tr_res.data:
+                trained = {r["hrnm"] for r in tr_res.data}
+                df["training_grade_enc"] = df["horse_name"].apply(
+                    lambda n: 1.0 if n in trained else 0.0
+                )
+            else:
+                df["training_grade_enc"] = 0.0
+
         # horse_race_history 조인: 해당 날짜 이하의 가장 최신 통계
         horse_ids = df["horse_id"].dropna().unique().tolist()
         if horse_ids:
