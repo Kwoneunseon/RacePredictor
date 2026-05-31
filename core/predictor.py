@@ -27,14 +27,18 @@ class RacePredictor:
         available = [c for c in features if c in df.columns]
         X = df[available].fillna(0)
 
-        probas = self.trainer.predict_proba(X)
+        rank_scores = self.trainer.predict_rank_score(X)
+        if rank_scores is not None:
+            scores = rank_scores
+        else:
+            scores = self.trainer.predict_proba(X)
 
         result = df.copy()
-        result["win_probability"] = probas
+        result["win_probability"] = scores
         result = result.sort_values("win_probability", ascending=False).reset_index(drop=True)
         result["predicted_rank"] = range(1, len(result) + 1)
 
-        logger.info(f"예측 완료: {len(result)}마리, 최고 확률={probas.max():.3f}")
+        logger.info(f"예측 완료: {len(result)}마리, 최고 점수={scores.max():.3f}")
         return result
 
     def predict_from_db(self, race_date: str, meet_code: int = None) -> pd.DataFrame:
