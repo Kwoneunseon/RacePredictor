@@ -47,13 +47,15 @@ FILTER_MIN_HORSES = 5
 
 FEATURE_COLUMNS = [
     "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
-    "horse_weight", "race_grade_enc", "track_condition_enc", "weather_enc",
+    "horse_weight", "race_grade_enc",
     "prev_total_races", "prev_5_avg_rank", "prev_total_avg_rank",
     "jockey_win_rate", "trainer_win_rate", "horse_win_rate",
     "horse_top3_rate", "experience_score", "recent_form",
-    "win_odds", "implied_prob",
-    "race_implied_prob_rank", "implied_prob_vs_mean",
     "horse_class_vs_mean", "win_rate_vs_mean",
     "jockey_recent_win_rate", "trainer_recent_win_rate",
     "training_grade_enc",
+    "days_since_last_race", "horse_weight_diff", "horse_win_rate_at_distance",
+    # 신규
+    "horse_track_win_rate", "jockey_horse_win_rate", "recent_rank_trend",
+    "jockey_track_win_rate", "weight_trend",
 ]
