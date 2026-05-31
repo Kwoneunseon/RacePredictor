@@ -3,7 +3,7 @@ from Utils.database import upsert, get_client
 from Utils.logger import get_logger
 from core.ev_calculator import EVCalculator
 from core.odds_collector import OddsCollector
-from config import BANKROLL
+from config import BANKROLL, BET_PROB_THRESHOLD, MAX_BET_FRACTION
 
 logger = get_logger(__name__)
 
@@ -38,36 +38,45 @@ class Investor:
             model_prob = float(top["win_probability"])
 
             if source == "fallback":
-                # 경주 내 상대 확률로 배당 추정: est_odds = (sum_probs / model_prob) * KRA_PAYOUT_RATE
-                # 모든 말의 확률 합이 클수록(모델이 특정 말을 강하게 선택) EV가 높아짐
-                sum_probs = float(group["win_probability"].fillna(0).sum())
-                if sum_probs <= 0 or model_prob <= 0:
-                    logger.debug(f"{race_id}: 확률 계산 불가, 스킵")
+                # 실시간 배당 없음 → 확률 임계값 기준으로 배팅 결정
+                if model_prob < BET_PROB_THRESHOLD:
+                    logger.debug(f"{race_id}: 확률 {model_prob:.1%} < {BET_PROB_THRESHOLD:.0%}, 스킵")
                     continue
-                odds = (sum_probs / model_prob) * KRA_PAYOUT_RATE
+                bet_type = "단승" if model_prob >= 0.35 else "연승"
+                amount = max(int(self.bankroll * MAX_BET_FRACTION * model_prob // 100) * 100, 100)
+                decisions.append({
+                    "race_id": race_id,
+                    "horse_id": horse_id,
+                    "horse_name": top.get("horse_name", horse_id),
+                    "bet_type": bet_type,
+                    "amount": amount,
+                    "ev": 0.0,
+                    "kelly_f": 0.0,
+                    "model_prob": model_prob,
+                    "odds": 0.0,
+                    "source": source,
+                })
             else:
                 odds = float(race_odds.get(horse_id, 0))
                 if odds <= 0:
                     logger.debug(f"{race_id}: 배당 없음, 스킵")
                     continue
-
-            rec = self.ev_calc.recommend(model_prob, odds, self.bankroll, source)
-            if rec is None:
-                logger.debug(f"{race_id}: EV 미달, 스킵")
-                continue
-
-            decisions.append({
-                "race_id": race_id,
-                "horse_id": horse_id,
-                "horse_name": top.get("horse_name", horse_id),
-                "bet_type": rec.bet_type,
-                "amount": rec.amount,
-                "ev": rec.ev,
-                "kelly_f": rec.kelly_f,
-                "model_prob": model_prob,
-                "odds": odds,
-                "source": source,
-            })
+                rec = self.ev_calc.recommend(model_prob, odds, self.bankroll, source)
+                if rec is None:
+                    logger.debug(f"{race_id}: EV 미달, 스킵")
+                    continue
+                decisions.append({
+                    "race_id": race_id,
+                    "horse_id": horse_id,
+                    "horse_name": top.get("horse_name", horse_id),
+                    "bet_type": rec.bet_type,
+                    "amount": rec.amount,
+                    "ev": rec.ev,
+                    "kelly_f": rec.kelly_f,
+                    "model_prob": model_prob,
+                    "odds": odds,
+                    "source": source,
+                })
 
         logger.info(f"베팅 결정: {len(decisions)}건 / {len(list(race_groups))}경주")
         return decisions

@@ -44,6 +44,7 @@ EV_THRESHOLD_SCRAPING = 0.10
 EV_THRESHOLD_FALLBACK = 0.40
 FILTER_DISTANCES = [1200, 1400]
 FILTER_MIN_HORSES = 5
+BET_PROB_THRESHOLD = 0.25  # fallback 시 배팅 최소 확률 (1위 예측마 기준)
 
 FEATURE_COLUMNS = [
     "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
