@@ -1,0 +1,25 @@
+﻿API             Endpoint                  상태       결과
+--------------------------------------------------------------------------------
+  API186_2      SeoulRaceEntry_2          500     
+  API217        SeoulEntry                500     
+  API217        SeoulEntry_1              500     
+  API217        ChaksunList_1             500     
+  API217        chaksunList_1             500     
+  API213        RaceDetailInfo_1          404      엔드포인트 없음
+  API213        raceDetailInfo_1          404      엔드포인트 없음
+  API213        SeoulRaceEntry_1          404      엔드포인트 없음
+  API214        SeoulRaceEntry_1          500     
+  API218        ChaksunList_1             500     
+  API218        chaksunList_1             500     
+  API218        SeoulEntry_1              500     
+  API222        SeoulEntry_1              500     
+  API223        SeoulEntry_1              500     
+  API224        SeoulEntry_1              500     
+  API186_1      SeoulRaceInfo_1           404      엔드포인트 없음
+  API186_3      SeoulRaceEntry_3          500     
+  API329        chaksunList               404      엔드포인트 없음
+  API217        raceEntry_1               500     
+  API217        RaceEntry_1               500     
+
+================================================================================
+데이터 있는 API를 찾지 못했습니다.

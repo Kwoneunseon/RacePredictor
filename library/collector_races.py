@@ -16,6 +16,10 @@ logger = get_logger(__name__)
 
 MEET_CODE_MAP = {'서울': 1, '제주': 2, '부산': 3, '부산경남': 3}
 TABLES_WITHOUT_UPDATED_AT = {'races', 'race_entries'}
+TABLE_ON_CONFLICT = {
+    'races': 'race_id',
+    'race_entries': 'race_id,horse_id',
+}
 
 # 경마장별 전용 API 엔드포인트
 MEET_RACE_ENDPOINTS = {
@@ -207,11 +211,15 @@ def save_missing_master_data(missing_data):
             jockey_datas = []
             logger.info(f"새로운 기수 {len(missing_data['jockeys'])}명 추가")
             for batch_start in range(0, len(missing_data['jockeys'])):
-                jockey_no = missing_data['jockeys'][batch_start]['jk_no']
+                entry = missing_data['jockeys'][batch_start]
+                jockey_no = entry['jk_no']
                 api_data, _ = jockey_fetch_page(jockey_no)
                 jockey_data = parse_jockey_data(api_data)
                 if jockey_data:
                     jockey_datas.append(jockey_data[0])
+                else:
+                    # API 데이터 없어도 최소 레코드 저장 (race_entries FK 제약 충족)
+                    jockey_datas.append({'jk_no': jockey_no, 'name': entry.get('name', f'Jockey_{jockey_no}')})
 
             save_jockey_data(jockey_datas)
             saved_counts['jockeys'] = len(missing_data['jockeys'])
@@ -223,11 +231,15 @@ def save_missing_master_data(missing_data):
             trainer_datas = []
             logger.info(f"새로운 조교사 {len(missing_data['trainers'])}명 추가")
             for batch_start in range(0, len(missing_data['trainers'])):
-                trainer_id = missing_data['trainers'][batch_start]['trainer_id']
+                entry = missing_data['trainers'][batch_start]
+                trainer_id = entry['trainer_id']
                 api_data, _ = trainer_fetch_page(trainer_id)
                 trainer_data = parse_trainer_data(api_data)
                 if trainer_data:
                     trainer_datas.append(trainer_data[0])
+                else:
+                    # API 데이터 없어도 최소 레코드 저장 (race_entries FK 제약 충족)
+                    trainer_datas.append({'trainer_id': trainer_id, 'name': entry.get('name', f'Trainer_{trainer_id}')})
 
             save_trainer_data(trainer_datas)
             saved_counts['trainers'] = len(missing_data['trainers'])
@@ -489,7 +501,11 @@ def save_table_data(table_name, data, batch_size=200):
                             record['updated_at'] = current_time
 
                 # Supabase에 데이터 삽입 (upsert 사용)
-                result = supabase.table(table_name).upsert(batch).execute()
+                on_conflict = TABLE_ON_CONFLICT.get(table_name)
+                if on_conflict:
+                    result = supabase.table(table_name).upsert(batch, on_conflict=on_conflict).execute()
+                else:
+                    result = supabase.table(table_name).upsert(batch).execute()
 
                 batch_count = len(batch)
                 total_saved += batch_count
@@ -500,13 +516,9 @@ def save_table_data(table_name, data, batch_size=200):
 
             except Exception as batch_error:
                 error_msg = str(batch_error)
-                if "duplicate key" in error_msg.lower():
-                    logger.info(f"{table_name} 배치 {batch_num}: 중복 데이터 스킵")
-                else:
-                    logger.error(f"{table_name} 배치 {batch_num} 저장 실패: {error_msg}")
-                    # 개별 저장 시도
-                    individual_saved = save_individual_records(table_name, batch)
-                    total_saved += individual_saved
+                logger.warning(f"{table_name} 배치 {batch_num} 실패, 개별 저장 시도: {error_msg[:80]}")
+                individual_saved = save_individual_records(table_name, batch)
+                total_saved += individual_saved
 
         logger.info(f"{table_name} 저장 완료: 총 {total_saved}개")
         return total_saved
@@ -524,7 +536,11 @@ def save_individual_records(table_name, records):
         try:
             if table_name not in TABLES_WITHOUT_UPDATED_AT:
                 record['updated_at'] = datetime.now().isoformat()
-            supabase.table(table_name).upsert(record).execute()
+            on_conflict = TABLE_ON_CONFLICT.get(table_name)
+            if on_conflict:
+                supabase.table(table_name).upsert(record, on_conflict=on_conflict).execute()
+            else:
+                supabase.table(table_name).upsert(record).execute()
             saved_count += 1
 
             time.sleep(0.02)
@@ -642,7 +658,7 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
     else:
         logger.error("경주 결과 저장 실패")
 
-# 실행 예시
 if __name__ == "__main__":
-    # 경주 결과 수집
-    pass
+    from datetime import datetime
+    today = datetime.now().strftime('%Y%m%d')
+    collecting_race_results(start_page=1, max_pages=50, start_date=today, end_date=today)

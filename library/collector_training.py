@@ -57,8 +57,15 @@ def fetch_training_data(trng_dt: str, page: int = 1, per_page: int = 1000):
 
 
 def parse_item(item: dict) -> dict:
+    raw_dt = str(item.get("trngDt", "") or "")
+    # API returns YYYYMMDD integer or string → convert to YYYY-MM-DD
+    raw_dt = raw_dt.replace("-", "")
+    if len(raw_dt) == 8:
+        trng_dt = f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]}"
+    else:
+        trng_dt = raw_dt[:10]
     return {
-        "trng_dt":      item.get("trngDt", "")[:10],   # YYYY-MM-DD or YYYYMMDD
+        "trng_dt":      trng_dt,
         "hrnm":         str(item.get("hrnm", "") or "").strip(),
         "belo_no":      str(item.get("beloNo", "") or "").strip(),
         "belo_trng_no": str(item.get("beloTrngNo", "") or "").strip(),
