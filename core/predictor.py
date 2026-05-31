@@ -35,10 +35,20 @@ class RacePredictor:
 
         result = df.copy()
         result["win_probability"] = scores
+
+        # 경주별 softmax: rank score → 경주 내 합계 100% 확률
+        if "race_id" in result.columns and rank_scores is not None:
+            def softmax(x):
+                e = np.exp(x - x.max())
+                return e / e.sum()
+            result["win_probability"] = result.groupby("race_id")["win_probability"].transform(
+                lambda x: softmax(x.values)
+            )
+
         result = result.sort_values("win_probability", ascending=False).reset_index(drop=True)
         result["predicted_rank"] = range(1, len(result) + 1)
 
-        logger.info(f"예측 완료: {len(result)}마리, 최고 점수={scores.max():.3f}")
+        logger.info(f"예측 완료: {len(result)}마리, 최고 확률={result['win_probability'].max():.3f}")
         return result
 
     def predict_from_db(self, race_date: str, meet_code: int = None) -> pd.DataFrame:
