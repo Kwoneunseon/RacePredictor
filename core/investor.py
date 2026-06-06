@@ -36,6 +36,7 @@ class Investor:
             top = group.sort_values("win_probability", ascending=False).iloc[0]
             horse_id = top.get("horse_id")
             model_prob = float(top["win_probability"])
+            top3_prob = float(top.get("top3_probability", model_prob))
 
             if source == "fallback":
                 # 실시간 배당 없음 → 경주 내 확률 합으로 EV 추정
@@ -57,6 +58,7 @@ class Investor:
                     "ev": ev,
                     "kelly_f": 0.0,
                     "model_prob": model_prob,
+                    "top3_prob": top3_prob,
                     "odds": estimated_odds,
                     "source": source,
                 })
@@ -78,6 +80,7 @@ class Investor:
                     "ev": rec.ev,
                     "kelly_f": rec.kelly_f,
                     "model_prob": model_prob,
+                    "top3_prob": top3_prob,
                     "odds": odds,
                     "source": source,
                 })

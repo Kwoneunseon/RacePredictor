@@ -42,6 +42,28 @@ def _fetch_race_entries(args) -> "pd.DataFrame":
     return fb._flatten_entries(all_entries)
 
 
+def cmd_tune(args):
+    logger.info("=== 하이퍼파라미터 튜닝 시작 (XGBoost·LightGBM) ===")
+    from config import OPTUNA_N_TRIALS
+    from core.feature_builder import RaceFeatureBuilder
+
+    df = _fetch_race_entries(args)
+    if df.empty:
+        logger.error("학습 데이터 없음")
+        return
+
+    fb = RaceFeatureBuilder()
+    df = fb.build_for_training(df, args.end_date)
+    df = df.dropna(subset=["horse_age", "race_distance"])
+
+    preprocessor = RacePreprocessor()
+    df_processed = preprocessor.fit_transform(df)
+
+    trainer = RaceModelTrainer()
+    trainer.tune(df_processed, n_trials=OPTUNA_N_TRIALS)
+    logger.info("튜닝 완료. 이제 '모델 재학습'을 실행하세요 (저장된 파라미터 자동 적용).")
+
+
 def cmd_train(args):
     logger.info("=== 모델 학습 시작 ===")
     import pandas as pd
@@ -188,7 +210,7 @@ def cmd_update_results(args):
 
 def main():
     parser = argparse.ArgumentParser(description="경마 자동 투자 봇")
-    parser.add_argument("--mode", choices=["train", "predict", "status", "update-results"],
+    parser.add_argument("--mode", choices=["train", "predict", "status", "update-results", "tune"],
                         default="status")
     parser.add_argument("--start-date", default="2024-01-01",
                         dest="start_date")
@@ -201,7 +223,9 @@ def main():
                         help="1=서울, 2=부산, 3=제주")
     args = parser.parse_args()
 
-    if args.mode == "train":
+    if args.mode == "tune":
+        cmd_tune(args)
+    elif args.mode == "train":
         cmd_train(args)
     elif args.mode == "predict":
         cmd_predict(args)

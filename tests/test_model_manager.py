@@ -9,6 +9,7 @@ def test_save_creates_pkl_file(tmp_path, mocker):
     mocker.patch("core.model_manager.MODEL_DIR", tmp_path)
     trainer = MagicMock()
     trainer.models = {"RF": "serializable_model_object"}
+    trainer.top3_models = {}
     trainer.scaler = "serializable_scaler_object"
     trainer.feature_columns = ["col1", "col2"]
     preprocessor = MagicMock()
@@ -24,6 +25,7 @@ def test_load_restores_trainer(tmp_path, mocker):
     mocker.patch("core.model_manager.MODEL_DIR", tmp_path)
     trainer = MagicMock()
     trainer.models = {"RF": "fake_model"}
+    trainer.top3_models = {"RF": "fake_top3_model"}
     trainer.scaler = "fake_scaler"
     trainer.feature_columns = ["col1"]
     preprocessor = MagicMock()

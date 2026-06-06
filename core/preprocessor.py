@@ -71,6 +71,7 @@ class RacePreprocessor:
     def _add_target(self, df: pd.DataFrame) -> pd.DataFrame:
         if "final_rank" in df.columns:
             df["is_winner"] = (df["final_rank"] == 1).astype(int)
+            df["is_top3"] = (df["final_rank"] <= 3).astype(int)
         return df
 
     def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:

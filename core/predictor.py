@@ -37,6 +37,9 @@ class RacePredictor:
         if not isinstance(rank_scores, np.ndarray):
             rank_scores = None
         clf_probs = self.trainer.predict_proba(X)
+        clf_probs_top3 = self.trainer.predict_proba_top3(X)
+        if not isinstance(clf_probs_top3, np.ndarray):
+            clf_probs_top3 = None
 
         result = df.copy()
 
@@ -63,6 +66,9 @@ class RacePredictor:
             result["win_probability"] = _softmax(rank_scores)
         else:
             result["win_probability"] = clf_probs
+
+        result["top3_probability"] = clf_probs_top3 if clf_probs_top3 is not None \
+            else result["win_probability"]
 
         result = result.sort_values("win_probability", ascending=False).reset_index(drop=True)
         result["predicted_rank"] = range(1, len(result) + 1)

@@ -47,6 +47,7 @@ FILTER_MIN_HORSES = 5
 BET_PROB_THRESHOLD = 0.50  # fallback 시 배팅 최소 확률 (1위 예측마 기준)
 SOFTMAX_TEMPERATURE = 0.3  # 낮을수록 확률 분포 더 뾰족 (0.1~1.0), 1.0=기존 방식
 LAMBDARANK_BLEND = 0.5    # LambdaRank 비중 (0.0=분류모델만, 1.0=LambdaRank만)
+OPTUNA_N_TRIALS = 60      # 하이퍼파라미터 탐색 횟수 (많을수록 정확, 오래 걸림)
 
 FEATURE_COLUMNS = [
     "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
