@@ -296,19 +296,12 @@ def cmd_status(args):
 
 
 def cmd_update_results(args):
-    """
-    경주 완료 후 파이프라인:
-    1) ScoreInfo 스크래핑 → win_odds DB 업데이트
-    2) rebuild_horse_history → 누적 통계 최신화
-    경마일 저녁에 실행하면 다음날 예측 품질이 향상됨.
-    """
     from library.scraper_score import update_all_meets
-    from rebuild_horse_history import main as rebuild_history
+    from core.history_rebuilder import rebuild
 
     date = args.date
     logger.info(f"=== 경주 결과 업데이트 시작: {date} ===")
 
-    # Step 1: win_odds 업데이트
     counts = update_all_meets(date)
     total = sum(counts.values())
     print(f"\n[1/2] win_odds 업데이트: {total}경주")
@@ -319,12 +312,9 @@ def cmd_update_results(args):
         print(f"  {date} 경주 데이터 없음 - 경마일이 아닐 수 있음")
         return
 
-    # Step 2: horse_race_history 재구성 (해당 날짜 이후 구간만)
     print(f"\n[2/2] horse_race_history 재구성 ({date} ~ {date})")
-    import sys
-    sys.argv = ["rebuild_horse_history.py", date, date]
     try:
-        rebuild_history()
+        rebuild(start_date=date, end_date=date)
         print("  완료")
     except Exception as e:
         logger.error(f"  horse_race_history 재구성 실패: {e}")

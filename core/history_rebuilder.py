@@ -1,12 +1,4 @@
-"""
-horse_race_history 테이블 재구성 스크립트
-race_entries의 전체 기간을 기반으로 각 경주일 기준 누적 통계를 계산해서 upsert
-
-실행: python rebuild_horse_history.py [시작일] [종료일]
-예)   python rebuild_horse_history.py 2024-01-01 2025-05-31  (빈 구간만 채울 때)
-      python rebuild_horse_history.py                        (전체 재구성)
-"""
-import sys
+"""horse_race_history 테이블 재구성 모듈"""
 import pandas as pd
 import numpy as np
 from Utils.database import get_client, upsert
@@ -18,7 +10,6 @@ BATCH_SIZE = 500
 
 
 def load_all_entries(client) -> pd.DataFrame:
-    """race_entries 전체 로드 (final_rank > 0)"""
     rows = []
     offset = 0
     while True:
@@ -41,7 +32,7 @@ def load_all_entries(client) -> pd.DataFrame:
 
 def compute_history(df: pd.DataFrame) -> pd.DataFrame:
     """
-    각 (horse_id, race_date) 에 대해 경주 직전 기준 누적 통계 계산.
+    각 (horse_id, race_date)에 대해 경주 직전 기준 누적 통계 계산.
     반환 컬럼: horse_id, as_of_date, prev_total_races, prev_wins,
                prev_top3, prev_5_avg_rank, prev_total_avg_rank
     """
@@ -58,12 +49,10 @@ def compute_history(df: pd.DataFrame) -> pd.DataFrame:
         dates = grp["race_date"].values
 
         for i in range(len(grp)):
-            prior = ranks[:i]  # 당일 경주 제외, 직전까지만
+            prior = ranks[:i]
             if len(prior) == 0:
-                prev_total = 0
-                prev_wins = 0
-                prev_top3 = 0
-                prev_5_avg = float(ranks[i])   # 첫 경주면 자기 자신으로 폴백
+                prev_total, prev_wins, prev_top3 = 0, 0, 0
+                prev_5_avg = float(ranks[i])
                 prev_total_avg = float(ranks[i])
             else:
                 prev_total = len(prior)
@@ -86,29 +75,27 @@ def compute_history(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 
-def main():
+def rebuild(start_date: str = None, end_date: str = None) -> None:
+    """
+    horse_race_history 테이블 재구성.
+    start_date, end_date: 특정 구간만 upsert할 때 지정 (None이면 전체).
+    """
     client = get_client()
-
-    # 날짜 범위 인자
-    filter_start = sys.argv[1] if len(sys.argv) > 1 else None
-    filter_end   = sys.argv[2] if len(sys.argv) > 2 else None
 
     logger.info("race_entries 전체 로드 중...")
     df_all = load_all_entries(client)
-    logger.info(f"총 {len(df_all)}건 로드 완료 ({df_all['race_date'].min()} ~ {df_all['race_date'].max()})")
+    logger.info(f"총 {len(df_all)}건 로드 완료")
 
-    logger.info("누적 통계 계산 중... (시간이 걸릴 수 있습니다)")
+    logger.info("누적 통계 계산 중...")
     hist_df = compute_history(df_all)
     logger.info(f"계산 완료: {len(hist_df)}행")
 
-    # 날짜 범위 필터 (특정 구간만 upsert할 때)
-    if filter_start:
-        hist_df = hist_df[hist_df["as_of_date"] >= filter_start]
-    if filter_end:
-        hist_df = hist_df[hist_df["as_of_date"] <= filter_end]
-    logger.info(f"upsert 대상: {len(hist_df)}행 ({filter_start or '전체'} ~ {filter_end or '전체'})")
+    if start_date:
+        hist_df = hist_df[hist_df["as_of_date"] >= start_date]
+    if end_date:
+        hist_df = hist_df[hist_df["as_of_date"] <= end_date]
+    logger.info(f"upsert 대상: {len(hist_df)}행 ({start_date or '전체'} ~ {end_date or '전체'})")
 
-    # 배치 upsert
     rows = hist_df.to_dict("records")
     total = 0
     for i in range(0, len(rows), BATCH_SIZE):
@@ -124,4 +111,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    rebuild(
+        start_date=sys.argv[1] if len(sys.argv) > 1 else None,
+        end_date=sys.argv[2] if len(sys.argv) > 2 else None,
+    )
