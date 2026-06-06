@@ -239,14 +239,24 @@ class RacePreprocessor:
         return df
 
     def _add_race_relative_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "win_odds" in df.columns:
+            odds = pd.to_numeric(df["win_odds"], errors="coerce").replace(0, np.nan)
+            df["implied_prob"] = 1.0 / odds
+        else:
+            df["implied_prob"] = np.nan
+
         if "race_id" not in df.columns:
             df["horse_class_vs_mean"] = 0.0
             df["win_rate_vs_mean"] = 0.0
+            df["race_implied_prob_rank"] = 1
+            df["implied_prob_vs_mean"] = 1.0
             return df
 
         grp = df.groupby("race_id")
         df["horse_class_vs_mean"] = grp["horse_class_num"].transform("mean") - df["horse_class_num"]
         df["win_rate_vs_mean"] = df["horse_win_rate"] - grp["horse_win_rate"].transform("mean")
+        df["race_implied_prob_rank"] = grp["implied_prob"].rank(ascending=False, method="min")
+        df["implied_prob_vs_mean"] = df["implied_prob"] / grp["implied_prob"].transform("mean")
         return df
 
     def _encode_categoricals(self, df: pd.DataFrame, fit: bool) -> pd.DataFrame:

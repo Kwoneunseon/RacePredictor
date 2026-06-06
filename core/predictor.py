@@ -34,6 +34,8 @@ class RacePredictor:
         X = df[available].fillna(0)
 
         rank_scores = self.trainer.predict_rank_score(X)
+        if not isinstance(rank_scores, np.ndarray):
+            rank_scores = None
         clf_probs = self.trainer.predict_proba(X)
 
         result = df.copy()

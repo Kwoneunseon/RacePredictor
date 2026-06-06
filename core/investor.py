@@ -38,9 +38,13 @@ class Investor:
             model_prob = float(top["win_probability"])
 
             if source == "fallback":
-                # 실시간 배당 없음 → 확률 임계값 기준으로 배팅 결정
-                if model_prob < BET_PROB_THRESHOLD:
-                    logger.debug(f"{race_id}: 확률 {model_prob:.1%} < {BET_PROB_THRESHOLD:.0%}, 스킵")
+                # 실시간 배당 없음 → 경주 내 확률 합으로 EV 추정
+                from config import EV_THRESHOLD_FALLBACK
+                sum_probs = float(group["win_probability"].sum())
+                estimated_odds = round((sum_probs / model_prob) * KRA_PAYOUT_RATE, 4)
+                ev = round(sum_probs * KRA_PAYOUT_RATE - 1, 4)
+                if ev <= EV_THRESHOLD_FALLBACK:
+                    logger.debug(f"{race_id}: 폴백 EV {ev:.3f} <= {EV_THRESHOLD_FALLBACK}, 스킵")
                     continue
                 bet_type = "단승" if model_prob >= 0.35 else "연승"
                 amount = max(int(self.bankroll * MAX_BET_FRACTION * model_prob // 100) * 100, 100)
@@ -50,10 +54,10 @@ class Investor:
                     "horse_name": top.get("horse_name", horse_id),
                     "bet_type": bet_type,
                     "amount": amount,
-                    "ev": 0.0,
+                    "ev": ev,
                     "kelly_f": 0.0,
                     "model_prob": model_prob,
-                    "odds": 0.0,
+                    "odds": estimated_odds,
                     "source": source,
                 })
             else:
