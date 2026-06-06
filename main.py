@@ -106,7 +106,7 @@ def cmd_train(args):
         logger.warning("horse_race_history 비어있음 – Task 1 SQL을 먼저 실행하세요")
 
     # 조교현황 training_grade_enc 조인: 경주일 전 7일 이내 기록 (배치 쿼리)
-    from core.predictor import _training_grade
+    from core.feature_builder import _training_grade
     _horse_names = df["horse_name"].dropna().unique().tolist() if "horse_name" in df.columns else []
     if _horse_names:
         _batch_size = 100
