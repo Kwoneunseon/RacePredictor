@@ -49,6 +49,12 @@ class RacePreprocessor:
                     "recent_rank_trend", "jockey_track_win_rate", "weight_trend"]:
             if col not in df.columns:
                 df[col] = 0.0
+        if "prev_win_odds" not in df.columns:
+            df["prev_win_odds"] = 15.0
+        if "prev_speed_figure" not in df.columns:
+            df["prev_speed_figure"] = 0.0
+        if "speed_figure_trend" not in df.columns:
+            df["speed_figure_trend"] = 0.0
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=False)
         return df

@@ -44,7 +44,9 @@ EV_THRESHOLD_SCRAPING = 0.10
 EV_THRESHOLD_FALLBACK = 0.40
 FILTER_DISTANCES = [1200, 1400]
 FILTER_MIN_HORSES = 5
-BET_PROB_THRESHOLD = 0.25  # fallback 시 배팅 최소 확률 (1위 예측마 기준)
+BET_PROB_THRESHOLD = 0.50  # fallback 시 배팅 최소 확률 (1위 예측마 기준)
+SOFTMAX_TEMPERATURE = 0.3  # 낮을수록 확률 분포 더 뾰족 (0.1~1.0), 1.0=기존 방식
+LAMBDARANK_BLEND = 0.5    # LambdaRank 비중 (0.0=분류모델만, 1.0=LambdaRank만)
 
 FEATURE_COLUMNS = [
     "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
@@ -59,4 +61,8 @@ FEATURE_COLUMNS = [
     # 신규
     "horse_track_win_rate", "jockey_horse_win_rate", "recent_rank_trend",
     "jockey_track_win_rate", "weight_trend",
+    # 시장 배당
+    "prev_win_odds",
+    # 속도 지수
+    "prev_speed_figure", "speed_figure_trend",
 ]

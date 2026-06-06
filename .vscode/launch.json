@@ -1,73 +1,143 @@
 {
     "version": "0.2.0",
     "configurations": [
+
+        // ════════════════════════════════════════════════════════
+        //  매일 사용 (경마일마다)
+        // ════════════════════════════════════════════════════════
+
+        {
+            // [아침] 오늘 경주 예측 → 콘솔에 전체 경주 + 베팅 추천 출력
+            // ★ date 를 오늘 날짜로 변경 후 실행
+            "name": "① 예측 - 오늘 전체",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "predict",
+                "--date", "2026-06-06"   // ← 경마일로 변경
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // [저녁] 경주 결과 스크래핑 → win_odds DB 업데이트 → horse_race_history 재구성
+            // 경마일 저녁에 실행하면 다음날 예측 품질이 향상됨
+            // ★ date 를 오늘 날짜로 변경 후 실행
+            "name": "② 결과 업데이트 (저녁 필수)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "update-results",
+                "--date", "2026-06-05"   // ← 오늘 날짜로 변경
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+
+        // ════════════════════════════════════════════════════════
+        //  경마장별 개별 예측 (특정 경마장만 볼 때)
+        // ════════════════════════════════════════════════════════
+
+        {
+            "name": "예측 - 서울",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--mode", "predict", "--date", "2026-06-07", "--meet", "1"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "예측 - 제주",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--mode", "predict", "--date", "2026-06-07", "--meet", "2"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "예측 - 부산",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--mode", "predict", "--date", "2026-06-07", "--meet", "3"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+
+        // ════════════════════════════════════════════════════════
+        //  주간 루틴 (일주일에 1~2회)
+        // ════════════════════════════════════════════════════════
+
+        {
+            // 최신 데이터로 모델 재학습
+            // end-date 를 최근 경마일로 업데이트 후 실행 (약 5~10분 소요)
+            "name": "모델 재학습",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "train",
+                "--start-date", "2024-01-01",
+                "--end-date",   "2026-06-05"   // ← 최근 경마일로 변경
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // 오늘까지 경주 결과 API 수집 (race_entries, win_odds 등)
+            "name": "데이터 수집 (오늘)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "library.collector_races",
+            "args": [],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // 특정 기간 데이터 백필 - 날짜 두 개 수정 후 사용
+            "name": "데이터 수집 (백필)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "library.collector_races",
+            "args": ["20260601", "20260607"],   // ← 시작일, 종료일
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // horse_race_history 전체 재구성 (오래 걸림, 월 1회 권장)
+            "name": "히스토리 전체 재구성",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/rebuild_horse_history.py",
+            "args": [],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+
+        // ════════════════════════════════════════════════════════
+        //  진단 / 점검
+        // ════════════════════════════════════════════════════════
+
+        {
+            // 최근 2개월 예측 적중률 분석 (accuracy_report.csv 생성)
+            "name": "정확도 분석",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/analyze_accuracy.py",
+            "args": [],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
         {
             "name": "Status 확인",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": ["--mode", "status"],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "모델 학습",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": [
-                "--mode", "train",
-                "--start-date", "2025-01-01",
-                "--end-date", "2025-06-30"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "예측 (서울)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": [
-                "--mode", "predict",
-                "--date", "2026-05-31",
-                "--meet", "1"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "예측 (제주)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": [
-                "--mode", "predict",
-                "--date", "2026-05-16",
-                "--meet", "2"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "예측 (부산)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": [
-                "--mode", "predict",
-                "--date", "2026-05-15",
-                "--meet", "3"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "데이터 수집",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "library.collector_races",
-            "args": [],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         }

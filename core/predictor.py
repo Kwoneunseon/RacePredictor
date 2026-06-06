@@ -1,8 +1,24 @@
 import pandas as pd
 import numpy as np
+from config import SOFTMAX_TEMPERATURE, LAMBDARANK_BLEND
 from Utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _softmax(x: np.ndarray, temperature: float = SOFTMAX_TEMPERATURE) -> np.ndarray:
+    """
+    경주 내 점수를 확률로 변환.
+    1) min-max 정규화로 스케일 의존성 제거
+    2) temperature < 1: 상위 말 확률을 더 높게 (기본 0.3)
+    """
+    s_min, s_max = x.min(), x.max()
+    if s_max == s_min:
+        return np.ones(len(x)) / len(x)
+    normalized = (x - s_min) / (s_max - s_min)
+    scaled = normalized / temperature
+    e = np.exp(scaled - scaled.max())
+    return e / e.sum()
 
 
 def _training_grade(remk_txt: str) -> int:
@@ -28,22 +44,33 @@ class RacePredictor:
         X = df[available].fillna(0)
 
         rank_scores = self.trainer.predict_rank_score(X)
-        if rank_scores is not None:
-            scores = rank_scores
-        else:
-            scores = self.trainer.predict_proba(X)
+        clf_probs = self.trainer.predict_proba(X)
 
         result = df.copy()
-        result["win_probability"] = scores
 
-        # 경주별 softmax: rank score → 경주 내 합계 100% 확률
-        if "race_id" in result.columns and rank_scores is not None:
-            def softmax(x):
-                e = np.exp(x - x.max())
-                return e / e.sum()
-            result["win_probability"] = result.groupby("race_id")["win_probability"].transform(
-                lambda x: softmax(x.values)
+        if rank_scores is not None and "race_id" in result.columns:
+            # LambdaRank + 분류모델 앙상블: 경주별 min-max 정규화 후 블렌딩 → softmax
+            result["_lr"] = rank_scores
+            result["_clf"] = clf_probs
+
+            def _blend_race(grp):
+                lr = grp["_lr"].values
+                clf = grp["_clf"].values
+                lr_range = lr.max() - lr.min()
+                lr_norm = (lr - lr.min()) / lr_range if lr_range > 1e-9 else np.full(len(lr), 0.5)
+                blended = LAMBDARANK_BLEND * lr_norm + (1 - LAMBDARANK_BLEND) * clf
+                return pd.Series(_softmax(blended), index=grp.index)
+
+            result["win_probability"] = result.groupby("race_id", group_keys=False).apply(_blend_race)
+            result = result.drop(columns=["_lr", "_clf"])
+
+            logger.debug(
+                f"앙상블 블렌딩: LambdaRank {LAMBDARANK_BLEND:.0%} + 분류모델 {1-LAMBDARANK_BLEND:.0%}"
             )
+        elif rank_scores is not None:
+            result["win_probability"] = _softmax(rank_scores)
+        else:
+            result["win_probability"] = clf_probs
 
         result = result.sort_values("win_probability", ascending=False).reset_index(drop=True)
         result["predicted_rank"] = range(1, len(result) + 1)
@@ -200,6 +227,64 @@ class RacePredictor:
                 df["horse_weight_diff"] = 0.0
 
         # horse_win_rate_at_distance
+        # prev_win_odds: 해당 말의 직전 경주 배당
+        prev_odds_res = client.table("race_entries")\
+            .select("horse_id, race_date, win_odds")\
+            .in_("horse_id", horse_ids)\
+            .lt("race_date", race_date)\
+            .gt("win_odds", 0)\
+            .execute()
+        if prev_odds_res.data:
+            prev_odds_df = pd.DataFrame(prev_odds_res.data)
+            prev_odds_df = (prev_odds_df.sort_values("race_date", ascending=False)
+                           .drop_duplicates(subset=["horse_id"], keep="first"))
+            odds_map = prev_odds_df.set_index("horse_id")["win_odds"].to_dict()
+            df["prev_win_odds"] = df["horse_id"].map(odds_map)
+            median_odds = prev_odds_df["win_odds"].median()
+            df["prev_win_odds"] = df["prev_win_odds"].fillna(median_odds)
+        else:
+            df["prev_win_odds"] = 15.0
+
+        # prev_speed_figure, speed_figure_trend: 직전 경주 완주속도 (m/s)
+        if horse_ids:
+            spd_res = client.table("race_entries")\
+                .select("horse_id, race_date, finish_time, races(race_distance)")\
+                .in_("horse_id", horse_ids)\
+                .lt("race_date", race_date)\
+                .gt("final_rank", 0)\
+                .not_.is_("finish_time", "null")\
+                .execute()
+            if spd_res.data:
+                spd_rows = [{
+                    "horse_id": r["horse_id"],
+                    "race_date": r["race_date"],
+                    "finish_time": r["finish_time"],
+                    "race_distance": (r.get("races") or {}).get("race_distance"),
+                } for r in spd_res.data]
+                spd_df = pd.DataFrame(spd_rows).dropna(subset=["finish_time", "race_distance"])
+                spd_df = spd_df[spd_df["finish_time"] > 0]
+                if not spd_df.empty:
+                    spd_df["_speed"] = spd_df["race_distance"].astype(float) / spd_df["finish_time"]
+                    spd_sorted = spd_df.sort_values(["horse_id", "race_date"])
+
+                    # prev_speed_figure: 직전 경주 속도
+                    spd_latest = (spd_sorted.drop_duplicates(subset=["horse_id"], keep="last"))
+                    spd_map = spd_latest.set_index("horse_id")["_speed"].to_dict()
+                    df["prev_speed_figure"] = df["horse_id"].map(spd_map).fillna(0.0)
+
+                    # speed_figure_trend: 최근 3경주 속도 기울기
+                    trend_map = {}
+                    for hid, grp in spd_sorted.groupby("horse_id"):
+                        vals = grp["_speed"].values[-3:]
+                        trend_map[hid] = float(np.polyfit(np.arange(len(vals)), vals, 1)[0]) if len(vals) >= 2 else 0.0
+                    df["speed_figure_trend"] = df["horse_id"].map(trend_map).fillna(0.0)
+                else:
+                    df["prev_speed_figure"] = 0.0
+                    df["speed_figure_trend"] = 0.0
+            else:
+                df["prev_speed_figure"] = 0.0
+                df["speed_figure_trend"] = 0.0
+
         if horse_ids and "race_distance" in df.columns:
             dist_res = client.table("race_entries")\
                 .select("horse_id, final_rank, races(race_distance)")\

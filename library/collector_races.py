@@ -109,22 +109,40 @@ def fetch_race_data_all(page=1, per_page=1000, meet_code=2, start_date=None, end
             "_type": "json",
         }
 
-    try:
-        response = requests.get(endpoint, params=params, timeout=30)
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            req = requests.Request('GET', endpoint, params=params).prepare()
+            logger.info(f"API 요청 URL - 경마장{meet_code} 페이지 {page}: {req.url}")
+            response = requests.Session().send(req, timeout=60)
 
-        if response.status_code == 200:
-            return response.json(), page
-        elif response.status_code == 429:
-            logger.warning(f"API 호출 제한 - 경마장{meet_code} 페이지 {page}, 5초 대기 후 재시도")
-            time.sleep(5)
-            return fetch_race_data_all(page, per_page, meet_code, start_date, end_date)
-        else:
-            logger.error(f"API 호출 실패 - 경마장{meet_code} 페이지 {page}: {response.status_code}")
+            if response.status_code == 200:
+                return response.json(), page
+            elif response.status_code == 429:
+                wait = 5 * attempt
+                logger.warning(f"API 호출 제한 - 경마장{meet_code} 페이지 {page}, {wait}초 대기 후 재시도")
+                time.sleep(wait)
+                continue
+            elif response.status_code in (502, 503, 504):
+                wait = 15 * attempt
+                logger.warning(f"API 서버 오류 {response.status_code} - 경마장{meet_code} 페이지 {page} (시도 {attempt}/{max_retries}), {wait}초 대기 후 재시도")
+                if attempt < max_retries:
+                    time.sleep(wait)
+            else:
+                logger.error(f"API 호출 실패 - 경마장{meet_code} 페이지 {page}: {response.status_code}")
+                return None, page
+
+        except requests.exceptions.Timeout:
+            wait = 10 * attempt
+            logger.warning(f"API 타임아웃 - 경마장{meet_code} 페이지 {page} (시도 {attempt}/{max_retries}), {wait}초 대기 후 재시도")
+            if attempt < max_retries:
+                time.sleep(wait)
+        except Exception as e:
+            logger.error(f"API 호출 중 오류 발생 - 경마장{meet_code} 페이지 {page}: {str(e)}")
             return None, page
 
-    except Exception as e:
-        logger.error(f"API 호출 중 오류 발생 - 경마장{meet_code} 페이지 {page}: {str(e)}")
-        return None, page
+    logger.error(f"API 최대 재시도 초과 - 경마장{meet_code} 페이지 {page}")
+    return None, page
 
 def get_existing_master_data():
     """기존 마스터 데이터 개수 확인"""
@@ -375,6 +393,7 @@ def parse_and_normalize_race_data(api_response):
                         'trainer_id': trainer_id,
                         'final_rank': safe_int(item.get('rcOrd')) if item.get('rcOrd') else safe_int(item.get('ord')),      #순위
                         'win_odds': safe_float(item.get('winOdds')),  #단승배당률
+                        'finish_time': safe_float(item.get('rcTime')),  #완주기록(초)
                     })
 
 
@@ -659,6 +678,16 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
         logger.error("경주 결과 저장 실패")
 
 if __name__ == "__main__":
+    import sys
     from datetime import datetime
     today = datetime.now().strftime('%Y%m%d')
-    collecting_race_results(start_page=1, max_pages=50, start_date=today, end_date=today)
+    # 사용법: python -m library.collector_races [시작일 종료일]
+    # 예)    python -m library.collector_races 20240101 20241231
+    if len(sys.argv) == 3:
+        start, end = sys.argv[1], sys.argv[2]
+    elif len(sys.argv) == 2:
+        start = end = sys.argv[1]
+    else:
+        start = end = today
+    logger.info(f"수집 기간: {start} ~ {end}")
+    collecting_race_results(start_page=1, max_pages=50, start_date=start, end_date=end)

@@ -144,6 +144,53 @@ def cmd_train(args):
     else:
         df["training_grade_enc"] = 1.0
 
+    # prev_win_odds: 해당 말의 직전 경주 배당 (당일 배당 누수 방지 - shift로 lag)
+    if "win_odds" in df.columns and "horse_id" in df.columns:
+        import pandas as _pd
+        odds_df = df[["horse_id", "race_date", "win_odds"]].copy()
+        odds_df["win_odds"] = pd.to_numeric(odds_df["win_odds"], errors="coerce")
+        odds_df = odds_df.sort_values(["horse_id", "race_date"]).reset_index(drop=True)
+        odds_df["prev_win_odds"] = odds_df.groupby("horse_id")["win_odds"].shift(1)
+        df = df.merge(odds_df[["horse_id", "race_date", "prev_win_odds"]], on=["horse_id", "race_date"], how="left")
+        median_odds = odds_df["win_odds"].median()
+        df["prev_win_odds"] = df["prev_win_odds"].fillna(median_odds)
+        logger.info(f"prev_win_odds 조인 완료 (중앙값 폴백={median_odds:.1f})")
+    else:
+        df["prev_win_odds"] = 15.0
+
+    # prev_speed_figure, speed_figure_trend: 직전 경주 완주속도 (m/s), 누수 방지 - shift로 lag
+    if "finish_time" in df.columns and "race_distance" in df.columns:
+        spd_df = df[["horse_id", "race_date", "finish_time", "race_distance"]].copy()
+        spd_df["finish_time"] = pd.to_numeric(spd_df["finish_time"], errors="coerce")
+        spd_df["race_distance"] = pd.to_numeric(spd_df["race_distance"], errors="coerce")
+        spd_df = spd_df.sort_values(["horse_id", "race_date"]).reset_index(drop=True)
+        spd_df["_speed"] = spd_df["race_distance"] / spd_df["finish_time"].replace(0, np.nan)
+        spd_df["prev_speed_figure"] = spd_df.groupby("horse_id")["_speed"].shift(1)
+
+        def _speed_slope(s):
+            arr = s.values
+            out = np.zeros(len(arr))
+            for i in range(len(arr)):
+                past = arr[max(0, i - 3):i]
+                past = past[~np.isnan(past)]
+                if len(past) >= 2:
+                    out[i] = float(np.polyfit(np.arange(len(past)), past, 1)[0])
+            return pd.Series(out, index=s.index)
+
+        spd_df["speed_figure_trend"] = spd_df.groupby("horse_id")["_speed"].transform(_speed_slope)
+        df = df.merge(
+            spd_df[["horse_id", "race_date", "prev_speed_figure", "speed_figure_trend"]],
+            on=["horse_id", "race_date"], how="left"
+        )
+        df["prev_speed_figure"] = df["prev_speed_figure"].fillna(0.0)
+        df["speed_figure_trend"] = df["speed_figure_trend"].fillna(0.0)
+        n_valid = (df["prev_speed_figure"] > 0).sum()
+        logger.info(f"prev_speed_figure 계산 완료 (유효 {n_valid}건)")
+    else:
+        df["prev_speed_figure"] = 0.0
+        df["speed_figure_trend"] = 0.0
+        logger.warning("finish_time 없음 - prev_speed_figure=0으로 설정 (데이터 수집 후 재학습 필요)")
+
     before = len(df)
     df = df.dropna(subset=["horse_age", "race_distance"])
     logger.info(f"학습 데이터: {len(df)}건 (피처 없는 {before - len(df)}건 제외)")
@@ -248,9 +295,46 @@ def cmd_status(args):
     print(f"재학습 필요: {'YES' if mm.is_outdated() else 'NO'}")
 
 
+def cmd_update_results(args):
+    """
+    경주 완료 후 파이프라인:
+    1) ScoreInfo 스크래핑 → win_odds DB 업데이트
+    2) rebuild_horse_history → 누적 통계 최신화
+    경마일 저녁에 실행하면 다음날 예측 품질이 향상됨.
+    """
+    from library.scraper_score import update_all_meets
+    from rebuild_horse_history import main as rebuild_history
+
+    date = args.date
+    logger.info(f"=== 경주 결과 업데이트 시작: {date} ===")
+
+    # Step 1: win_odds 업데이트
+    counts = update_all_meets(date)
+    total = sum(counts.values())
+    print(f"\n[1/2] win_odds 업데이트: {total}경주")
+    for name, cnt in counts.items():
+        print(f"  {name}: {cnt}경주")
+
+    if total == 0:
+        print(f"  {date} 경주 데이터 없음 - 경마일이 아닐 수 있음")
+        return
+
+    # Step 2: horse_race_history 재구성 (해당 날짜 이후 구간만)
+    print(f"\n[2/2] horse_race_history 재구성 ({date} ~ {date})")
+    import sys
+    sys.argv = ["rebuild_horse_history.py", date, date]
+    try:
+        rebuild_history()
+        print("  완료")
+    except Exception as e:
+        logger.error(f"  horse_race_history 재구성 실패: {e}")
+
+    logger.info(f"=== 경주 결과 업데이트 완료: {date} ===")
+
+
 def main():
     parser = argparse.ArgumentParser(description="경마 자동 투자 봇")
-    parser.add_argument("--mode", choices=["train", "predict", "status"],
+    parser.add_argument("--mode", choices=["train", "predict", "status", "update-results"],
                         default="status")
     parser.add_argument("--start-date", default="2024-01-01",
                         dest="start_date")
@@ -269,6 +353,8 @@ def main():
         cmd_predict(args)
     elif args.mode == "status":
         cmd_status(args)
+    elif args.mode == "update-results":
+        cmd_update_results(args)
 
 
 if __name__ == "__main__":
