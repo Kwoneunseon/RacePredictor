@@ -5,8 +5,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, accuracy_score, ndcg_score
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier, LGBMRanker
+from xgboost import XGBRanker
+from lightgbm import LGBMRanker
 from config import FEATURE_COLUMNS, MODEL_CONFIG, MODEL_DIR
 from Utils.logger import get_logger
 
@@ -45,19 +45,21 @@ class RaceModelTrainer:
 
         best_params = self._load_best_params()
 
-        logger.info("=== 단승(1등) 모델 학습 ===")
+        # RandomForest·LogisticRegression: 이진분류 (행 단위)
+        logger.info("=== 단승(1등) 분류 모델 학습 (RF·LR) ===")
         win_metrics = self._train_classifiers(
             X_train, X_test, y_train_win, y_test_win,
             X_train_s, X_test_s, target="winner", best_params=best_params,
         )
 
-        logger.info("=== 연승(3등 이내) 모델 학습 ===")
+        logger.info("=== 연승(3등 이내) 분류 모델 학습 (RF·LR) ===")
         top3_metrics = self._train_classifiers(
             X_train, X_test, y_train_top3, y_test_top3,
             X_train_s, X_test_s, target="top3", best_params=best_params,
         )
 
-        ranker_metrics = self._train_ranker(df_sorted, feature_cols)
+        # XGBoost·LightGBM: pairwise ranker (경주 내 상대 순위 직접 학습)
+        ranker_metrics = self._train_pairwise_rankers(df_sorted, feature_cols, best_params)
 
         all_metrics = {
             **win_metrics,
@@ -151,10 +153,22 @@ class RaceModelTrainer:
         return best_params
 
     def predict_rank_score(self, X: pd.DataFrame) -> np.ndarray | None:
-        ranker = self.models.get("LambdaRank")
-        if ranker is None:
+        """XGBRanker·LGBMRanker 점수를 min-max 정규화 후 평균하여 반환."""
+        X = X.fillna(0)
+        _RANKER_KEYS = ["XGBoost", "LightGBM", "LambdaRank"]
+        scores_list = []
+        for name in _RANKER_KEYS:
+            ranker = self.models.get(name)
+            if ranker is None:
+                continue
+            raw = ranker.predict(X)
+            s_min, s_max = raw.min(), raw.max()
+            normalized = (raw - s_min) / (s_max - s_min) if s_max > s_min \
+                else np.full(len(raw), 0.5)
+            scores_list.append(normalized)
+        if not scores_list:
             return None
-        return ranker.predict(X.fillna(0))
+        return np.mean(scores_list, axis=0)
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """단승(1등) 확률 앙상블"""
@@ -186,47 +200,12 @@ class RaceModelTrainer:
         target: str,
         best_params: dict,
     ) -> dict:
-        pos_weight = len(y_train[y_train == 0]) / max(len(y_train[y_train == 1]), 1)
-        xgb_p = best_params.get("XGBoost", {})
-        lgb_p = best_params.get("LightGBM", {})
-
         model_defs = {
             "RandomForest": (
                 RandomForestClassifier(
                     n_estimators=200, max_depth=10,
                     random_state=MODEL_CONFIG["random_state"],
                     class_weight="balanced",
-                ),
-                X_train, X_test,
-            ),
-            "XGBoost": (
-                XGBClassifier(
-                    n_estimators=       xgb_p.get("n_estimators", 200),
-                    max_depth=          xgb_p.get("max_depth", 6),
-                    learning_rate=      xgb_p.get("learning_rate", 0.1),
-                    subsample=          xgb_p.get("subsample", 1.0),
-                    colsample_bytree=   xgb_p.get("colsample_bytree", 1.0),
-                    min_child_weight=   xgb_p.get("min_child_weight", 1),
-                    gamma=              xgb_p.get("gamma", 0.0),
-                    random_state=MODEL_CONFIG["random_state"],
-                    eval_metric="logloss", verbosity=0,
-                    scale_pos_weight=pos_weight,
-                ),
-                X_train, X_test,
-            ),
-            "LightGBM": (
-                LGBMClassifier(
-                    n_estimators=       lgb_p.get("n_estimators", 200),
-                    max_depth=          lgb_p.get("max_depth", 6),
-                    learning_rate=      lgb_p.get("learning_rate", 0.1),
-                    subsample=          lgb_p.get("subsample", 1.0),
-                    colsample_bytree=   lgb_p.get("colsample_bytree", 1.0),
-                    num_leaves=         lgb_p.get("num_leaves", 31),
-                    min_child_samples=  lgb_p.get("min_child_samples", 20),
-                    reg_alpha=          lgb_p.get("reg_alpha", 0.0),
-                    reg_lambda=         lgb_p.get("reg_lambda", 0.0),
-                    random_state=MODEL_CONFIG["random_state"],
-                    class_weight="balanced", verbose=-1,
                 ),
                 X_train, X_test,
             ),
@@ -252,18 +231,21 @@ class RaceModelTrainer:
             logger.info(f"    {name}: AUC={auc:.3f}, Acc={acc:.3f}")
 
         if target == "winner":
-            self.models = results
+            self.models.update(results)
         else:
-            self.top3_models = results
+            self.top3_models.update(results)
         return metrics
 
-    def _train_ranker(self, df_sorted: pd.DataFrame, feature_cols: list) -> dict:
+    def _train_pairwise_rankers(
+        self, df_sorted: pd.DataFrame, feature_cols: list, best_params: dict
+    ) -> dict:
+        """XGBRanker(pairwise)·LGBMRanker(lambdarank) 학습. race-level 그룹 사용."""
         if "race_id" not in df_sorted.columns or "final_rank" not in df_sorted.columns:
-            logger.warning("LambdaRank 학습 불가: race_id 또는 final_rank 없음")
+            logger.warning("Ranker 학습 불가: race_id 또는 final_rank 없음")
             return {}
 
         race_dates = df_sorted.groupby("race_id")["race_date"].first().sort_values()
-        split_idx = int(len(race_dates) * (1 - MODEL_CONFIG["test_size"]))
+        split_idx  = int(len(race_dates) * (1 - MODEL_CONFIG["test_size"]))
         train_races = set(race_dates.index[:split_idx])
         test_races  = set(race_dates.index[split_idx:])
 
@@ -271,10 +253,10 @@ class RaceModelTrainer:
         df_test  = df_sorted[df_sorted["race_id"].isin(test_races)].sort_values("race_id")
 
         if df_train.empty or df_test.empty:
-            logger.warning("LambdaRank: train/test split 후 데이터 부족")
+            logger.warning("Ranker: train/test split 후 데이터 부족")
             return {}
 
-        def make_label(rank):
+        def make_label(rank: int) -> int:
             if rank == 1: return 4
             if rank == 2: return 3
             if rank == 3: return 2
@@ -283,42 +265,88 @@ class RaceModelTrainer:
         X_train = df_train[feature_cols].fillna(0)
         X_test  = df_test[feature_cols].fillna(0)
         y_train = df_train["final_rank"].apply(make_label)
-        y_test  = df_test["final_rank"].apply(make_label)
         train_groups = df_train.groupby("race_id", sort=False).size().values
-        test_groups  = df_test.groupby("race_id", sort=False).size().values
+        xgb_p = best_params.get("XGBoost", {})
+        lgb_p = best_params.get("LightGBM", {})
+        metrics = {}
 
-        ranker = LGBMRanker(
+        # ── XGBRanker (pairwise) ──────────────────────────────────────────
+        logger.info("XGBRanker(pairwise) 학습 중...")
+        xgb_ranker = XGBRanker(
+            objective="rank:pairwise",
+            n_estimators=     xgb_p.get("n_estimators", 200),
+            max_depth=        xgb_p.get("max_depth", 6),
+            learning_rate=    xgb_p.get("learning_rate", 0.1),
+            subsample=        xgb_p.get("subsample", 1.0),
+            colsample_bytree= xgb_p.get("colsample_bytree", 1.0),
+            random_state=MODEL_CONFIG["random_state"],
+            verbosity=0,
+        )
+        qid_train = np.repeat(np.arange(len(train_groups)), train_groups)
+        xgb_ranker.fit(X_train, y_train, qid=qid_train)
+        xgb_scores = xgb_ranker.predict(X_test)
+        xgb_p1   = self._precision_at_1_score(df_test.assign(score=xgb_scores), "score")
+        xgb_ndcg = self._eval_ndcg(df_test, xgb_scores, feature_cols)
+        self.models["XGBoost"] = xgb_ranker
+        metrics["XGBoost"] = {"precision_at_1": xgb_p1, "ndcg3": xgb_ndcg}
+        logger.info(f"  XGBRanker: Precision@1={xgb_p1:.3f}, NDCG@3={xgb_ndcg:.3f}")
+
+        # ── LGBMRanker (lambdarank) ──────────────────────────────────────
+        logger.info("LGBMRanker(lambdarank) 학습 중...")
+        lgb_ranker = LGBMRanker(
             objective="lambdarank",
-            n_estimators=300, max_depth=6,
+            n_estimators=      lgb_p.get("n_estimators", 300),
+            max_depth=         lgb_p.get("max_depth", 6),
+            learning_rate=     lgb_p.get("learning_rate", 0.1),
+            subsample=         lgb_p.get("subsample", 1.0),
+            colsample_bytree=  lgb_p.get("colsample_bytree", 1.0),
+            num_leaves=        lgb_p.get("num_leaves", 31),
+            min_child_samples= lgb_p.get("min_child_samples", 20),
             random_state=MODEL_CONFIG["random_state"], verbose=-1,
         )
-        logger.info("LambdaRank 학습 중...")
-        ranker.fit(X_train, y_train, group=train_groups)
+        lgb_ranker.fit(X_train, y_train, group=train_groups)
+        lgb_scores = lgb_ranker.predict(X_test)
+        lgb_p1   = self._precision_at_1_score(df_test.assign(score=lgb_scores), "score")
+        lgb_ndcg = self._eval_ndcg(df_test, lgb_scores, feature_cols)
+        self.models["LightGBM"] = lgb_ranker
+        metrics["LightGBM"] = {"precision_at_1": lgb_p1, "ndcg3": lgb_ndcg}
+        logger.info(f"  LGBMRanker: Precision@1={lgb_p1:.3f}, NDCG@3={lgb_ndcg:.3f}")
 
+        return metrics
+
+    def _eval_ndcg(
+        self, df_test: pd.DataFrame, scores: np.ndarray, feature_cols: list
+    ) -> float:
+        """경주별 NDCG@3 평균."""
+        def make_label(rank):
+            if rank == 1: return 4
+            if rank == 2: return 3
+            if rank == 3: return 2
+            return 1
+
+        df_eval = df_test.copy()
+        df_eval["_score"] = scores
         ndcg_scores = []
-        for _, grp in df_test.groupby("race_id"):
+        for _, grp in df_eval.groupby("race_id"):
             if len(grp) < 2:
                 continue
             true_labels = grp["final_rank"].apply(make_label).values.reshape(1, -1)
-            pred_scores = ranker.predict(grp[feature_cols].fillna(0)).reshape(1, -1)
-            k = min(3, len(grp))
-            ndcg_scores.append(ndcg_score(true_labels, pred_scores, k=k))
-
-        ndcg3 = float(np.mean(ndcg_scores)) if ndcg_scores else 0.0
-        logger.info(f"  LambdaRank: NDCG@3={ndcg3:.3f}")
-
-        self.models["LambdaRank"] = ranker
-        return {"LambdaRank": {"ndcg3": ndcg3}}
+            pred_scores = grp["_score"].values.reshape(1, -1)
+            ndcg_scores.append(ndcg_score(true_labels, pred_scores, k=min(3, len(grp))))
+        return float(np.mean(ndcg_scores)) if ndcg_scores else 0.0
 
     def _ensemble_proba(self, model_dict: dict, X: pd.DataFrame) -> np.ndarray:
         X = X.fillna(0)
         X_scaled = self.scaler.transform(X)
+        _RANKER_KEYS = {"XGBoost", "LightGBM", "LambdaRank"}
         probas = []
         for name, model in model_dict.items():
-            if name == "LambdaRank":
+            if name in _RANKER_KEYS:
                 continue
             Xin = X_scaled if name == "LogisticRegression" else X
             probas.append(model.predict_proba(Xin)[:, 1])
+        if not probas:
+            return np.zeros(len(X))
         return np.mean(probas, axis=0)
 
     def _precision_at_1_score(self, df: pd.DataFrame, score_col: str = "score") -> float:
