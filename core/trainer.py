@@ -321,6 +321,23 @@ class RaceModelTrainer:
             probas.append(model.predict_proba(Xin)[:, 1])
         return np.mean(probas, axis=0)
 
+    def _precision_at_1_score(self, df: pd.DataFrame, score_col: str = "score") -> float:
+        """
+        각 경주에서 score가 가장 높은 말이 실제 final_rank==1인 비율.
+        df 컬럼 필수: race_id, final_rank, {score_col}
+        """
+        hits = 0
+        races = 0
+        for _, grp in df.groupby("race_id"):
+            if grp.empty:
+                continue
+            pred_winner_idx = grp[score_col].idxmax()
+            actual_rank = grp.loc[pred_winner_idx, "final_rank"]
+            if actual_rank == 1:
+                hits += 1
+            races += 1
+        return hits / races if races > 0 else 0.0
+
     def _load_best_params(self) -> dict:
         params_path = MODEL_DIR / "best_params.json"
         if params_path.exists():

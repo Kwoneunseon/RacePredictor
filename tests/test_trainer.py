@@ -58,3 +58,39 @@ def test_trainer_predict_proba_shape(preprocessed_df):
     proba = trainer.predict_proba(X)
     assert proba.shape == (10,)
     assert (proba >= 0).all() and (proba <= 1).all()
+
+
+def test_precision_at_1_perfect():
+    """모든 경주에서 1위를 정확히 예측하면 1.0"""
+    trainer = RaceModelTrainer()
+    df = pd.DataFrame({
+        "race_id":    ["r1", "r1", "r1", "r2", "r2", "r2"],
+        "final_rank": [1, 2, 3, 1, 2, 3],
+        "score":      [0.9, 0.5, 0.2, 0.8, 0.4, 0.1],
+    })
+    result = trainer._precision_at_1_score(df, score_col="score")
+    assert result == pytest.approx(1.0)
+
+
+def test_precision_at_1_zero():
+    """모든 경주에서 1위를 틀리면 0.0"""
+    trainer = RaceModelTrainer()
+    df = pd.DataFrame({
+        "race_id":    ["r1", "r1", "r1", "r2", "r2", "r2"],
+        "final_rank": [1, 2, 3, 1, 2, 3],
+        "score":      [0.1, 0.5, 0.9, 0.1, 0.4, 0.8],
+    })
+    result = trainer._precision_at_1_score(df, score_col="score")
+    assert result == pytest.approx(0.0)
+
+
+def test_precision_at_1_half():
+    """절반 적중하면 0.5"""
+    trainer = RaceModelTrainer()
+    df = pd.DataFrame({
+        "race_id":    ["r1", "r1", "r2", "r2"],
+        "final_rank": [1, 2, 1, 2],
+        "score":      [0.9, 0.1, 0.1, 0.9],
+    })
+    result = trainer._precision_at_1_score(df, score_col="score")
+    assert result == pytest.approx(0.5)
