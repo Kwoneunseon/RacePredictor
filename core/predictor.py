@@ -7,6 +7,16 @@ from core.feature_builder import RaceFeatureBuilder
 logger = get_logger(__name__)
 
 
+def _blend_group(grp: pd.DataFrame, lr_col: str, clf_col: str) -> pd.Series:
+    """경주 내 ranker 점수와 분류 확률을 LAMBDARANK_BLEND 비율로 블렌딩 후 softmax."""
+    lr = grp[lr_col].values
+    clf = grp[clf_col].values
+    lr_range = lr.max() - lr.min()
+    lr_norm = (lr - lr.min()) / lr_range if lr_range > 1e-9 else np.full(len(lr), 0.5)
+    blended = LAMBDARANK_BLEND * lr_norm + (1 - LAMBDARANK_BLEND) * clf
+    return pd.Series(_softmax(blended), index=grp.index)
+
+
 def _softmax(x: np.ndarray, temperature: float = SOFTMAX_TEMPERATURE) -> np.ndarray:
     """
     경주 내 점수를 확률로 변환.
@@ -33,42 +43,50 @@ class RacePredictor:
         available = [c for c in features if c in df.columns]
         X = df[available].fillna(0)
 
-        rank_scores = self.trainer.predict_rank_score(X)
+        rank_scores      = self.trainer.predict_rank_score(X)
+        rank_scores_top3 = self.trainer.predict_rank_score_top3(X)
+        clf_probs        = self.trainer.predict_proba(X)
+        clf_probs_top3   = self.trainer.predict_proba_top3(X)
+
         if not isinstance(rank_scores, np.ndarray):
             rank_scores = None
-        clf_probs = self.trainer.predict_proba(X)
-        clf_probs_top3 = self.trainer.predict_proba_top3(X)
+        if not isinstance(rank_scores_top3, np.ndarray):
+            rank_scores_top3 = None
         if not isinstance(clf_probs_top3, np.ndarray):
             clf_probs_top3 = None
 
         result = df.copy()
 
+        # ── 단승(win_probability) ──────────────────────────────────────
         if rank_scores is not None and "race_id" in result.columns:
-            # LambdaRank + 분류모델 앙상블: 경주별 min-max 정규화 후 블렌딩 → softmax
-            result["_lr"] = rank_scores
+            result["_lr"]  = rank_scores
             result["_clf"] = clf_probs
-
-            def _blend_race(grp):
-                lr = grp["_lr"].values
-                clf = grp["_clf"].values
-                lr_range = lr.max() - lr.min()
-                lr_norm = (lr - lr.min()) / lr_range if lr_range > 1e-9 else np.full(len(lr), 0.5)
-                blended = LAMBDARANK_BLEND * lr_norm + (1 - LAMBDARANK_BLEND) * clf
-                return pd.Series(_softmax(blended), index=grp.index)
-
-            result["win_probability"] = result.groupby("race_id", group_keys=False).apply(_blend_race)
+            win_probs = pd.Series(np.zeros(len(result)), index=result.index)
+            for _, grp in result.groupby("race_id"):
+                s = _blend_group(grp, "_lr", "_clf")
+                win_probs[s.index] = s
+            result["win_probability"] = win_probs
             result = result.drop(columns=["_lr", "_clf"])
-
-            logger.debug(
-                f"앙상블 블렌딩: LambdaRank {LAMBDARANK_BLEND:.0%} + 분류모델 {1-LAMBDARANK_BLEND:.0%}"
-            )
+            logger.debug(f"앙상블 블렌딩: LambdaRank {LAMBDARANK_BLEND:.0%} + 분류모델 {1-LAMBDARANK_BLEND:.0%}")
         elif rank_scores is not None:
             result["win_probability"] = _softmax(rank_scores)
         else:
             result["win_probability"] = clf_probs
 
-        result["top3_probability"] = clf_probs_top3 if clf_probs_top3 is not None \
-            else result["win_probability"]
+        # ── 연승(top3_probability) ────────────────────────────────────
+        if rank_scores_top3 is not None and clf_probs_top3 is not None and "race_id" in result.columns:
+            result["_top3_lr"]  = rank_scores_top3
+            result["_top3_clf"] = clf_probs_top3
+            top3_probs = pd.Series(np.zeros(len(result)), index=result.index)
+            for _, grp in result.groupby("race_id"):
+                s = _blend_group(grp, "_top3_lr", "_top3_clf")
+                top3_probs[s.index] = s
+            result["top3_probability"] = top3_probs
+            result = result.drop(columns=["_top3_lr", "_top3_clf"])
+        elif clf_probs_top3 is not None:
+            result["top3_probability"] = clf_probs_top3
+        else:
+            result["top3_probability"] = result["win_probability"]
 
         result = result.sort_values("win_probability", ascending=False).reset_index(drop=True)
         result["predicted_rank"] = range(1, len(result) + 1)
