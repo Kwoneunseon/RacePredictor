@@ -19,6 +19,7 @@ class ModelManager:
         data = {
             "models": trainer.models,
             "top3_models": trainer.top3_models,
+            "top3_ranker_models": trainer.top3_ranker_models,
             "scaler": trainer.scaler,
             "feature_columns": trainer.feature_columns,
             "label_encoders": preprocessor.label_encoders,
@@ -57,6 +58,7 @@ class ModelManager:
             data = joblib.load(pkl_path)
             trainer.models = data["models"]
             trainer.top3_models = data.get("top3_models", {})
+            trainer.top3_ranker_models = data.get("top3_ranker_models", {})
             trainer.scaler = data["scaler"]
             trainer.feature_columns = data["feature_columns"]
             preprocessor.label_encoders = data["label_encoders"]
