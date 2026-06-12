@@ -60,12 +60,14 @@ class RaceModelTrainer:
         )
 
         # XGBoost·LightGBM: pairwise ranker (경주 내 상대 순위 직접 학습)
-        ranker_metrics = self._train_pairwise_rankers(df_sorted, feature_cols, best_params)
+        ranker_metrics      = self._train_pairwise_rankers(df_sorted, feature_cols, best_params)
+        ranker_top3_metrics = self._train_pairwise_rankers_top3(df_sorted, feature_cols, best_params)
 
         all_metrics = {
             **win_metrics,
             **{f"top3_{k}": v for k, v in top3_metrics.items()},
             **ranker_metrics,
+            **ranker_top3_metrics,
         }
         return {"models": self.models, "metrics": all_metrics}
 
@@ -329,6 +331,81 @@ class RaceModelTrainer:
         self.models["LightGBM"] = lgb_ranker
         metrics["LightGBM"] = {"precision_at_1": lgb_p1, "ndcg3": lgb_ndcg}
         logger.info(f"  LGBMRanker: Precision@1={lgb_p1:.3f}, NDCG@3={lgb_ndcg:.3f}")
+
+        return metrics
+
+    def _train_pairwise_rankers_top3(
+        self, df_sorted: pd.DataFrame, feature_cols: list, best_params: dict
+    ) -> dict:
+        """연승(top3) 전용 XGBRanker(pairwise)·LGBMRanker(lambdarank) 학습."""
+        if "race_id" not in df_sorted.columns or "final_rank" not in df_sorted.columns:
+            logger.warning("Top3 Ranker 학습 불가: race_id 또는 final_rank 없음")
+            return {}
+
+        race_dates = df_sorted.groupby("race_id")["race_date"].first().sort_values()
+        split_idx  = int(len(race_dates) * (1 - MODEL_CONFIG["test_size"]))
+        train_races = set(race_dates.index[:split_idx])
+        test_races  = set(race_dates.index[split_idx:])
+
+        df_train = df_sorted[df_sorted["race_id"].isin(train_races)].sort_values("race_id")
+        df_test  = df_sorted[df_sorted["race_id"].isin(test_races)].sort_values("race_id")
+
+        if df_train.empty or df_test.empty:
+            logger.warning("Top3 Ranker: train/test split 후 데이터 부족")
+            return {}
+
+        def make_top3_label(rank: int) -> int:
+            if rank == 1: return 2
+            if rank <= 3: return 1
+            return 0
+
+        X_train = df_train[feature_cols].fillna(0)
+        X_test  = df_test[feature_cols].fillna(0)
+        y_train = df_train["final_rank"].apply(make_top3_label)
+        train_groups = df_train.groupby("race_id", sort=False).size().values
+        xgb_p = best_params.get("XGBoost", {})
+        lgb_p = best_params.get("LightGBM", {})
+        metrics = {}
+
+        logger.info("Top3 XGBRanker(pairwise) 학습 중...")
+        xgb_ranker = XGBRanker(
+            objective="rank:pairwise",
+            n_estimators=     xgb_p.get("n_estimators", 200),
+            max_depth=        xgb_p.get("max_depth", 6),
+            learning_rate=    xgb_p.get("learning_rate", 0.1),
+            subsample=        xgb_p.get("subsample", 1.0),
+            colsample_bytree= xgb_p.get("colsample_bytree", 1.0),
+            random_state=MODEL_CONFIG["random_state"],
+            verbosity=0,
+        )
+        qid_train = np.repeat(np.arange(len(train_groups)), train_groups)
+        xgb_ranker.fit(X_train, y_train, qid=qid_train)
+        xgb_scores = xgb_ranker.predict(X_test)
+        xgb_p3   = self._precision_at_3_score(df_test.assign(score=xgb_scores), "score")
+        xgb_ndcg = self._eval_ndcg(df_test, xgb_scores, feature_cols)
+        self.top3_ranker_models["XGBoost"] = xgb_ranker
+        metrics["top3_XGBoost"] = {"precision_at_3": xgb_p3, "ndcg3": xgb_ndcg}
+        logger.info(f"  Top3 XGBRanker: Precision@3={xgb_p3:.3f}, NDCG@3={xgb_ndcg:.3f}")
+
+        logger.info("Top3 LGBMRanker(lambdarank) 학습 중...")
+        lgb_ranker = LGBMRanker(
+            objective="lambdarank",
+            n_estimators=      lgb_p.get("n_estimators", 300),
+            max_depth=         lgb_p.get("max_depth", 6),
+            learning_rate=     lgb_p.get("learning_rate", 0.1),
+            subsample=         lgb_p.get("subsample", 1.0),
+            colsample_bytree=  lgb_p.get("colsample_bytree", 1.0),
+            num_leaves=        lgb_p.get("num_leaves", 31),
+            min_child_samples= lgb_p.get("min_child_samples", 20),
+            random_state=MODEL_CONFIG["random_state"], verbose=-1,
+        )
+        lgb_ranker.fit(X_train, y_train, group=train_groups)
+        lgb_scores = lgb_ranker.predict(X_test)
+        lgb_p3   = self._precision_at_3_score(df_test.assign(score=lgb_scores), "score")
+        lgb_ndcg = self._eval_ndcg(df_test, lgb_scores, feature_cols)
+        self.top3_ranker_models["LightGBM"] = lgb_ranker
+        metrics["top3_LightGBM"] = {"precision_at_3": lgb_p3, "ndcg3": lgb_ndcg}
+        logger.info(f"  Top3 LGBMRanker: Precision@3={lgb_p3:.3f}, NDCG@3={lgb_ndcg:.3f}")
 
         return metrics
 

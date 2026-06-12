@@ -246,3 +246,75 @@ def test_precision_at_3_zero():
     })
     result = trainer._precision_at_3_score(df, score_col="score")
     assert result == pytest.approx(0.0)
+
+
+def test_top3_xgb_lgb_are_rankers():
+    """학습 후 top3_ranker_models에 XGBRanker·LGBMRanker가 있어야 한다."""
+    from xgboost import XGBRanker
+    from lightgbm import LGBMRanker as LGBMRankerCls
+
+    df = _make_race_df()
+    trainer = RaceModelTrainer()
+    trainer.train(df)
+
+    assert "XGBoost" in trainer.top3_ranker_models, "top3 XGBoost ranker 없음"
+    assert "LightGBM" in trainer.top3_ranker_models, "top3 LightGBM ranker 없음"
+    assert isinstance(trainer.top3_ranker_models["XGBoost"], XGBRanker)
+    assert isinstance(trainer.top3_ranker_models["LightGBM"], LGBMRankerCls)
+
+
+def test_top3_ranker_scores_top3_horses_higher():
+    """predict_rank_score_top3에서 top3 말의 평균 점수가 나머지보다 높아야 한다."""
+    np.random.seed(42)
+    n_races, horses_per = 30, 8
+    n = n_races * horses_per
+    race_ids = [f"r{i}" for i in range(n_races) for _ in range(horses_per)]
+    final_ranks = [j + 1 for _ in range(n_races) for j in range(horses_per)]
+    jockey_wr, horse_wr = [], []
+    for rank in final_ranks:
+        base = 0.3 - rank * 0.02
+        jockey_wr.append(max(0.0, base + np.random.uniform(-0.01, 0.01)))
+        horse_wr.append(max(0.0, base + np.random.uniform(-0.01, 0.01)))
+    dates = [f"2024-{(i // 28) % 12 + 1:02d}-{(i % 28) + 1:02d}" for i in range(n)]
+    df = pd.DataFrame({
+        "race_id": race_ids,
+        "race_date": pd.to_datetime(dates),
+        "final_rank": final_ranks,
+        "is_winner": [1 if r == 1 else 0 for r in final_ranks],
+        "horse_age": np.random.randint(3, 8, n),
+        "horse_class_num": np.random.randint(1, 6, n),
+        "horse_weight": np.random.randint(440, 520, n),
+        "race_distance": np.random.choice([1200, 1400], n),
+        "race_grade_enc": np.random.randint(0, 3, n),
+        "jockey_win_rate": jockey_wr,
+        "trainer_win_rate": np.random.uniform(0, 0.3, n),
+        "horse_win_rate": horse_wr,
+        "horse_top3_rate": np.random.uniform(0, 0.5, n),
+        "prev_total_races": np.random.randint(3, 30, n),
+        "prev_5_avg_rank": [r * 0.9 + np.random.uniform(0, 0.3) for r in final_ranks],
+        "prev_total_avg_rank": np.random.uniform(1, 8, n),
+        "horse_class_vs_mean": np.random.uniform(-2, 2, n),
+        "win_rate_vs_mean": np.random.uniform(-0.1, 0.1, n),
+        "jockey_recent_win_rate": np.random.uniform(0, 0.3, n),
+        "trainer_recent_win_rate": np.random.uniform(0, 0.3, n),
+        "training_grade_enc": np.random.uniform(0, 3, n),
+        "days_since_last_race": np.random.randint(7, 60, n),
+        "horse_weight_diff": np.random.uniform(-10, 10, n),
+        "horse_win_rate_at_distance": np.random.uniform(0, 0.3, n),
+        "horse_track_win_rate": np.random.uniform(0, 0.3, n),
+        "jockey_horse_win_rate": np.random.uniform(0, 0.3, n),
+        "jockey_track_win_rate": np.random.uniform(0, 0.3, n),
+        "recent_rank_trend": np.random.uniform(-1, 1, n),
+        "weight_trend": np.random.uniform(-5, 5, n),
+        "entry_number": np.tile(np.arange(1, horses_per + 1), n_races),
+        "prev_win_odds": np.random.uniform(2, 30, n),
+    })
+    trainer = RaceModelTrainer()
+    trainer.train(df)
+    available = [c for c in trainer.feature_columns if c in df.columns]
+    X = df[available].fillna(0)
+    scores = trainer.predict_rank_score_top3(X)
+    assert scores is not None
+    is_top3 = np.array(final_ranks) <= 3
+    assert scores[is_top3].mean() > scores[~is_top3].mean(), \
+        f"top3 평균({scores[is_top3].mean():.3f}) ≤ 나머지 평균({scores[~is_top3].mean():.3f})"
