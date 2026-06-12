@@ -217,3 +217,32 @@ def test_precision_at_1_half():
     })
     result = trainer._precision_at_1_score(df, score_col="score")
     assert result == pytest.approx(0.5)
+
+
+def test_predict_rank_score_top3_returns_none_when_empty():
+    trainer = RaceModelTrainer()
+    X = pd.DataFrame({"horse_age": [4, 5], "horse_win_rate": [0.1, 0.2]})
+    result = trainer.predict_rank_score_top3(X)
+    assert result is None
+
+
+def test_precision_at_3_perfect():
+    trainer = RaceModelTrainer()
+    df = pd.DataFrame({
+        "race_id":    ["r1"] * 6,
+        "final_rank": [1, 2, 3, 4, 5, 6],
+        "score":      [0.9, 0.8, 0.7, 0.3, 0.2, 0.1],
+    })
+    result = trainer._precision_at_3_score(df, score_col="score")
+    assert result == pytest.approx(1.0)
+
+
+def test_precision_at_3_zero():
+    trainer = RaceModelTrainer()
+    df = pd.DataFrame({
+        "race_id":    ["r1"] * 6,
+        "final_rank": [1, 2, 3, 4, 5, 6],
+        "score":      [0.1, 0.2, 0.3, 0.9, 0.8, 0.7],
+    })
+    result = trainer._precision_at_3_score(df, score_col="score")
+    assert result == pytest.approx(0.0)

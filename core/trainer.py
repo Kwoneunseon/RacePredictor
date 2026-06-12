@@ -15,8 +15,9 @@ logger = get_logger(__name__)
 
 class RaceModelTrainer:
     def __init__(self):
-        self.models: dict = {}         # 단승(1등) 분류 모델
-        self.top3_models: dict = {}    # 연승(3등 이내) 분류 모델
+        self.models: dict = {}              # 단승(1등) 분류 + ranker 모델
+        self.top3_models: dict = {}         # 연승(3등 이내) 분류 모델 (RF, LR)
+        self.top3_ranker_models: dict = {}  # 연승 ranker 모델 (XGBRanker, LGBMRanker)
         self.scaler = StandardScaler()
         self.feature_columns: list = []
 
@@ -159,6 +160,23 @@ class RaceModelTrainer:
         scores_list = []
         for name in _RANKER_KEYS:
             ranker = self.models.get(name)
+            if ranker is None:
+                continue
+            raw = ranker.predict(X)
+            s_min, s_max = raw.min(), raw.max()
+            normalized = (raw - s_min) / (s_max - s_min) if s_max > s_min \
+                else np.full(len(raw), 0.5)
+            scores_list.append(normalized)
+        if not scores_list:
+            return None
+        return np.mean(scores_list, axis=0)
+
+    def predict_rank_score_top3(self, X: pd.DataFrame) -> np.ndarray | None:
+        """연승 XGBRanker·LGBMRanker 점수를 min-max 정규화 후 평균하여 반환."""
+        X = X.fillna(0)
+        scores_list = []
+        for name in ["XGBoost", "LightGBM"]:
+            ranker = self.top3_ranker_models.get(name)
             if ranker is None:
                 continue
             raw = ranker.predict(X)
@@ -365,6 +383,17 @@ class RaceModelTrainer:
                 hits += 1
             races += 1
         return hits / races if races > 0 else 0.0
+
+    def _precision_at_3_score(self, df: pd.DataFrame, score_col: str = "score") -> float:
+        """각 경주에서 score 상위 3마리 중 실제 final_rank <= 3인 말의 비율 평균."""
+        scores = []
+        for _, grp in df.groupby("race_id"):
+            if len(grp) < 3:
+                continue
+            top3_predicted = grp.nlargest(3, score_col)
+            hit = (top3_predicted["final_rank"] <= 3).sum()
+            scores.append(hit / 3)
+        return float(np.mean(scores)) if scores else 0.0
 
     def _load_best_params(self) -> dict:
         params_path = MODEL_DIR / "best_params.json"
