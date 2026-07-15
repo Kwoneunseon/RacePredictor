@@ -24,6 +24,9 @@ def run_backtest(start_date: str, end_date: str):
         return
 
     # 경주별 모델 픽(win_prob 최고) + 인기마 픽(prev_win_odds 최저) 선정
+    # 주의: prev_win_odds는 직전 배당 기록이 없는 말(데뷔마 등)의 경우
+    # feature_builder에서 전체 중앙값으로 대체되므로, 그런 말이 여러 마리인
+    # 경주에서는 인기마 픽이 동률 중 임의(행 순서)로 뽑힐 수 있다.
     def best_pick(grp):
         best = grp.loc[grp["win_prob"].idxmax()]
         favorite = grp.loc[grp["prev_win_odds"].idxmin()]
