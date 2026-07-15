@@ -30,7 +30,11 @@ def run_backtest(start_date: str, end_date: str):
         # 경주에서는 인기마 픽이 동률 중 임의(행 순서)로 뽑힐 수 있다.
         def best_pick(grp):
             best = grp.loc[grp["win_prob"].idxmax()]
-            favorite = grp.loc[grp["prev_win_odds"].idxmin()]
+            # 데뷔마(prev_total_races==0)는 prev_win_odds가 중앙값으로 대체된 값이라
+            # 인기마 후보에서 제외한다 (동률 임의 픽 방지). 전원 데뷔마인 경주만 예외적으로 전체에서 픽.
+            non_debut = grp[grp["prev_total_races"] > 0]
+            favorite_pool = non_debut if len(non_debut) > 0 else grp
+            favorite = favorite_pool.loc[favorite_pool["prev_win_odds"].idxmin()]
             return pd.Series({
                 "race_date":       best["race_date"],
                 "win_prob":        best["win_prob"],

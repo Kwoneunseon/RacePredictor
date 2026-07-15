@@ -88,7 +88,7 @@ def run_predictions(start_date: str, end_date: str):
     """모델 로드 → 과거 데이터 로드 → 피처 빌드 → 전처리 → 예측까지 수행.
 
     반환 DataFrame 컬럼: race_id, race_date, final_rank, top3_prob, win_prob,
-    prev_win_odds, n_horses, is_top3_actual, is_win_actual.
+    prev_win_odds, prev_total_races, n_horses, is_top3_actual, is_win_actual.
     모델이 없거나 데이터가 없으면 None (오류 메시지는 내부에서 출력).
     """
     print("모델 로드 중...")
@@ -115,6 +115,7 @@ def run_predictions(start_date: str, end_date: str):
     race_ids      = df_feat["race_id"].copy() if "race_id" in df_feat.columns else pd.Series(range(len(df_feat)))
     race_dates    = df_feat["race_date"].copy() if "race_date" in df_feat.columns else pd.Series([""] * len(df_feat))
     prev_win_odds = df_feat["prev_win_odds"].copy() if "prev_win_odds" in df_feat.columns else pd.Series([0.0] * len(df_feat))
+    prev_total_races = df_feat["prev_total_races"].copy() if "prev_total_races" in df_feat.columns else pd.Series([0] * len(df_feat))
 
     n_horses_map = df_feat.groupby("race_id").size().rename("n_horses")
 
@@ -140,6 +141,7 @@ def run_predictions(start_date: str, end_date: str):
         "top3_prob":     top3_probs,
         "win_prob":      win_probs,
         "prev_win_odds": prev_win_odds.values,
+        "prev_total_races": prev_total_races.values,
     }, index=df_feat.index)
 
     result_df["is_top3_actual"] = (result_df["final_rank"] <= 3).astype(int)
