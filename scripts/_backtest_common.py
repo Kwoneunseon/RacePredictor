@@ -1,4 +1,10 @@
 """backtest_top3.py / backtest_win.py 공통 로딩·예측 로직"""
+import contextlib
+import io
+import sys
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 
 from Utils.database import get_client
@@ -6,6 +12,48 @@ from core.feature_builder import RaceFeatureBuilder
 from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.model_manager import ModelManager
+
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "BackTestReport"
+
+
+class _Tee:
+    """여러 스트림에 동시에 write하기 위한 헬퍼 (콘솔 출력 + 캡처용 버퍼)."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self.streams:
+            s.flush()
+
+
+class ReportCapture:
+    """`with capture_report(...) as rc:` 블록 종료 후 저장된 경로를 담는 컨테이너."""
+
+    def __init__(self, kind: str):
+        self.kind = kind
+        self.path: Path | None = None
+
+
+@contextlib.contextmanager
+def capture_report(kind: str):
+    """print() 출력을 콘솔에 그대로 보여주면서 동시에 캡처해,
+    블록 종료 시 BackTestReport/Result_{kind}_{날짜}_{시간}.md로 저장한다."""
+    holder = ReportCapture(kind)
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(_Tee(sys.stdout, buf)):
+            yield holder
+    finally:
+        REPORTS_DIR.mkdir(exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = REPORTS_DIR / f"Result_{kind}_{ts}.md"
+        path.write_text(f"```text\n{buf.getvalue()}\n```\n", encoding="utf-8")
+        holder.path = path
 
 
 def load_historical_data(start_date: str, end_date: str) -> pd.DataFrame:

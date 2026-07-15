@@ -8,3 +8,5 @@ models/
 logs/
 catboost_info/
 race_results/
+reports/
+BackTestReport/
