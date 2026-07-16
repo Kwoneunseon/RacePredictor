@@ -85,7 +85,10 @@ def save_rows(rows: list[dict]) -> int:
 
 def collect_meet_date(meet: int, rc_date: str) -> int:
     """특정 경마장·경주일자의 전체 데이터 수집 (페이지네이션)."""
-    all_rows = []
+    # (race_id, horse_id) 기준 dict로 모아서 중복 제거 — API가 동일 레코드를 중복 반환하는 경우가 있어
+    # (예: 2026-02-15_서울_10 경주 0060361), 한 upsert 배치 내 중복 키가 있으면 Postgres가
+    # "ON CONFLICT DO UPDATE command cannot affect row a second time" 오류를 낸다.
+    rows_by_key: dict[tuple[str, str], dict] = {}
     page = 1
     while True:
         items = fetch_race_detail(meet, rc_date, page=page)
@@ -96,13 +99,13 @@ def collect_meet_date(meet: int, rc_date: str) -> int:
         for it in items:
             parsed = parse_item(it)
             if parsed:
-                all_rows.append(parsed)
+                rows_by_key[(parsed["race_id"], parsed["horse_id"])] = parsed
         if len(items) < 200:
             break
         page += 1
         time.sleep(0.2)
 
-    saved = save_rows(all_rows)
+    saved = save_rows(list(rows_by_key.values()))
     logger.info(f"경주결과종합 저장: meet={meet} {rc_date} → {saved}건")
     return saved
 
