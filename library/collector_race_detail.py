@@ -113,9 +113,20 @@ def collect_meet_date(meet: int, rc_date: str) -> int:
 def collect_range(start_date: str, end_date: str) -> int:
     """start_date, end_date: 'YYYY-MM-DD'. 기간 내 실제 경주가 있었던 (경마장,날짜) 조합만 수집."""
     client = get_client()
-    res = client.table("races").select("race_date, meet_code")\
-        .gte("race_date", start_date).lte("race_date", end_date).execute()
-    combos = sorted({(r["race_date"], r["meet_code"]) for r in (res.data or [])})
+    all_rows = []
+    page_size, offset = 1000, 0
+    while True:
+        res = client.table("races").select("race_date, meet_code")\
+            .gte("race_date", start_date).lte("race_date", end_date)\
+            .order("race_date")\
+            .range(offset, offset + page_size - 1).execute()
+        if not res.data:
+            break
+        all_rows.extend(res.data)
+        if len(res.data) < page_size:
+            break
+        offset += page_size
+    combos = sorted({(r["race_date"], r["meet_code"]) for r in all_rows})
 
     total = 0
     for race_date, meet_code in combos:
