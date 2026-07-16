@@ -124,6 +124,7 @@ def test_build_for_prediction_returns_required_columns():
         "horse_id", "horse_name", "meet_code", "race_distance",
         "prev_win_odds", "current_win_odds", "training_grade_enc",
         "days_since_last_race", "prev_speed_figure", "speed_figure_trend",
+        "assigned_weight",
     ]
     for col in required:
         assert col in result.columns, f"{col} 컬럼 없음"
@@ -146,6 +147,8 @@ def test_build_for_prediction_fallback_values():
     assert result["training_grade_enc"].iloc[0] == 1.0
     assert result["days_since_last_race"].iloc[0] == 60
     assert result["prev_speed_figure"].iloc[0] == 0.0
+    # race_entry_detail에 매칭되는 행 없음 → 기본 폴백값 56.0
+    assert result["assigned_weight"].iloc[0] == 56.0
 
 
 # ──────────────────────────────────────────────
