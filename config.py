@@ -45,25 +45,51 @@ EV_THRESHOLD_FALLBACK = 0.40
 FILTER_DISTANCES = [1200, 1400]
 FILTER_MIN_HORSES = 5
 BET_PROB_THRESHOLD = 0.50  # fallback 시 배팅 최소 확률 (1위 예측마 기준)
-SOFTMAX_TEMPERATURE = 0.3  # 낮을수록 확률 분포 더 뾰족 (0.1~1.0), 1.0=기존 방식
+TOP3_PROB_THRESHOLD = 0.65  # 연승 베팅 최소 확신도 (408경주 백테스트: 79.9% 적중/69.6% 커버, 2026-07-04 검증)
+SOFTMAX_TEMPERATURE = 0.6  # 낮을수록 확률 분포 더 뾰족 (0.1~1.0), 1.0=기존 방식
 LAMBDARANK_BLEND = 0.5    # LambdaRank 비중 (0.0=분류모델만, 1.0=LambdaRank만)
 OPTUNA_N_TRIALS = 60      # 하이퍼파라미터 탐색 횟수 (많을수록 정확, 오래 걸림)
 
 FEATURE_COLUMNS = [
-    "horse_age", "is_male", "horse_class_num", "race_distance", "total_horses",
-    "horse_weight", "race_grade_enc",
+    # 말 기본 정보
+    "horse_age", "horse_class_num", "horse_weight",
+    # 경주 정보
+    "race_distance", "race_grade_enc",
+    # 기수/조교사 통산 성적
+    "jockey_win_rate", "trainer_win_rate",
+    # 말 통산 성적
+    "horse_win_rate", "horse_top3_rate",
     "prev_total_races", "prev_5_avg_rank", "prev_total_avg_rank",
-    "jockey_win_rate", "trainer_win_rate", "horse_win_rate",
-    "horse_top3_rate", "experience_score", "recent_form",
+    # 경주 내 상대적 특성
     "horse_class_vs_mean", "win_rate_vs_mean",
+    # 최근 성적 (30일)
     "jockey_recent_win_rate", "trainer_recent_win_rate",
+    # 조교 상태
     "training_grade_enc",
-    "days_since_last_race", "horse_weight_diff", "horse_win_rate_at_distance",
-    # 신규
-    "horse_track_win_rate", "jockey_horse_win_rate", "recent_rank_trend",
-    "jockey_track_win_rate", "weight_trend",
-    # 시장 배당
+    # 컨디션/체중
+    "days_since_last_race", "horse_weight_diff",
+    # 거리·경마장·조합 특화 승률
+    "horse_win_rate_at_distance", "horse_track_win_rate",
+    "jockey_horse_win_rate", "jockey_track_win_rate",
+    # 속도 지표 (거리/기록시간)
+    "prev_speed_figure", "speed_figure_trend", "horse_speed_at_distance",
+    # 추세
+    "recent_rank_trend", "weight_trend",
+    # 부담중량
+    "assigned_weight",
+    # 출발 게이트 번호 (안쪽 레인 이점)
+    "entry_number",
+    # 직전 경주 배당 (경마 전날부터 이용 가능한 시장 신호)
     "prev_win_odds",
-    # 속도 지수
-    "prev_speed_figure", "speed_figure_trend",
+    # 최근 폼 및 경험 지표
+    "recent_form",          # 최근 5경주 평균순위 기반 폼 지표 (6 - prev_5_avg_rank)
+    "experience_score",     # 누적 레이스 수 log 변환
+    # 마장·날씨 인코딩
+    "track_condition_enc",  # 마장 상태 (양호/불량 등)
+    "weather_enc",          # 날씨 인코딩
+    # 성별
+    "is_male",              # 수컷=1
+    # 배당 상대 지표
+    "implied_prob_vs_mean", # 경주 내 배당 확률 / 평균 배당 확률
+    "race_implied_prob_rank",  # 경주 내 배당 확률 순위 (1=가장 낮은 배당=인기마)
 ]

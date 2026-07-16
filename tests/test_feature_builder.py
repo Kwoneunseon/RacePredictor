@@ -93,6 +93,8 @@ def make_mock_client(entry_data=None):
     mock_chain.in_.return_value.lt.return_value.gt.return_value.not_.is_.return_value.execute.return_value.data = []
     mock_chain.in_.return_value.gte.return_value.lt.return_value.execute.return_value.data = []
     mock_chain.gte.return_value.lt.return_value.not_.is_.return_value.execute.return_value.data = []
+    # _fetch_assigned_weight: .select(...).in_("race_id", ...).execute() (중간 필터 없음)
+    mock_chain.in_.return_value.execute.return_value.data = []
 
     return client
 
@@ -112,15 +114,16 @@ def test_build_for_prediction_returns_required_columns():
     entry_data = [make_raw_entry("H1")]
     client = make_mock_client(entry_data)
 
-    with patch("core.feature_builder.get_client", return_value=client):
+    with patch("core.feature_builder.get_client", return_value=client), \
+         patch("library.scraper_odds.fetch_race_win_odds", return_value={}):
         from core.feature_builder import RaceFeatureBuilder
         fb = RaceFeatureBuilder()
         result = fb.build_for_prediction("2026-06-07")
 
     required = [
         "horse_id", "horse_name", "meet_code", "race_distance",
-        "prev_win_odds", "training_grade_enc", "days_since_last_race",
-        "prev_speed_figure", "speed_figure_trend",
+        "prev_win_odds", "current_win_odds", "training_grade_enc",
+        "days_since_last_race", "prev_speed_figure", "speed_figure_trend",
     ]
     for col in required:
         assert col in result.columns, f"{col} 컬럼 없음"
@@ -131,12 +134,85 @@ def test_build_for_prediction_fallback_values():
     entry_data = [make_raw_entry("H1")]
     client = make_mock_client(entry_data)
 
-    with patch("core.feature_builder.get_client", return_value=client):
+    with patch("core.feature_builder.get_client", return_value=client), \
+         patch("library.scraper_odds.fetch_race_win_odds", return_value={}):
         from core.feature_builder import RaceFeatureBuilder
         fb = RaceFeatureBuilder()
         result = fb.build_for_prediction("2026-06-07")
 
     assert result["prev_win_odds"].iloc[0] == 15.0
+    # 스크래핑 실패 시 current_win_odds = prev_win_odds
+    assert result["current_win_odds"].iloc[0] == 15.0
     assert result["training_grade_enc"].iloc[0] == 1.0
     assert result["days_since_last_race"].iloc[0] == 60
     assert result["prev_speed_figure"].iloc[0] == 0.0
+
+
+# ──────────────────────────────────────────────
+# _fetch_distance_rates 단위 테스트 (DB mock)
+# ──────────────────────────────────────────────
+def test_fetch_distance_rates_computes_speed_at_distance():
+    """같은 거리 과거 경주들의 평균 속도(거리/기록시간)를 계산한다."""
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "race_distance": [1200]})
+
+    client = MagicMock()
+    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value
+    chain.execute.return_value.data = [
+        {"horse_id": "H1", "final_rank": 2, "finish_time": 80.0, "races": {"race_distance": 1200}},
+        {"horse_id": "H1", "final_rank": 1, "finish_time": 75.0, "races": {"race_distance": 1200}},
+    ]
+
+    result = fb._fetch_distance_rates(df, "2026-06-07", client)
+    assert "horse_speed_at_distance" in result.columns
+    expected = (1200 / 80.0 + 1200 / 75.0) / 2
+    assert result["horse_speed_at_distance"].iloc[0] == pytest.approx(expected)
+
+
+def test_fetch_distance_rates_speed_defaults_to_zero_when_no_history():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "race_distance": [1200]})
+
+    client = MagicMock()
+    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value
+    chain.execute.return_value.data = []
+
+    result = fb._fetch_distance_rates(df, "2026-06-07", client)
+    assert result["horse_speed_at_distance"].iloc[0] == 0.0
+
+
+def test_fetch_assigned_weight_for_training_fills_median_when_missing():
+    import pandas as pd
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({
+        "race_id": ["R1", "R2", "R3"],
+        "horse_id": ["H1", "H2", "H3"],
+    })
+    detail_rows = [
+        {"race_id": "R1", "horse_id": "H1", "assigned_weight": 54.0},
+        {"race_id": "R2", "horse_id": "H2", "assigned_weight": 58.0},
+        # R3/H3는 race_entry_detail에 없음 (수집 실패/미백필 케이스)
+    ]
+    result = fb._fetch_assigned_weight_for_training(df, detail_rows)
+    assert result.loc[result["race_id"] == "R1", "assigned_weight"].iloc[0] == 54.0
+    assert result.loc[result["race_id"] == "R2", "assigned_weight"].iloc[0] == 58.0
+    # 결측은 중앙값(54, 58의 중앙값=56)으로 대체
+    assert result.loc[result["race_id"] == "R3", "assigned_weight"].iloc[0] == 56.0
+
+
+def test_build_for_prediction_uses_scraped_odds():
+    """스크래핑 성공 시 current_win_odds에 실시간 배당이 반영된다"""
+    entry_data = [make_raw_entry("H1")]
+    client = make_mock_client(entry_data)
+
+    # entry_number=1인 말에 배당 5.3 반환
+    with patch("core.feature_builder.get_client", return_value=client), \
+         patch("library.scraper_odds.fetch_race_win_odds", return_value={1: 5.3}):
+        from core.feature_builder import RaceFeatureBuilder
+        fb = RaceFeatureBuilder()
+        result = fb.build_for_prediction("2026-06-07")
+
+    assert result["current_win_odds"].iloc[0] == pytest.approx(5.3)

@@ -1,6 +1,7 @@
 """DB에서 피처를 수집·계산해 DataFrame으로 반환하는 클래스"""
 import numpy as np
 import pandas as pd
+import library.scraper_odds as scraper_odds
 from Utils.database import get_client
 from Utils.logger import get_logger
 
@@ -55,7 +56,9 @@ class RaceFeatureBuilder:
         df = self._fetch_history(df, race_date, client)
         df = self._fetch_last_race_features(df, race_date, client)
         df = self._fetch_prev_odds(df, race_date, client)
+        df = self._fetch_current_odds(df, race_date)
         df = self._fetch_speed_features(df, race_date, client)
+        df = self._fetch_assigned_weight(df, client)
         df = self._fetch_distance_rates(df, race_date, client)
         df = self._fetch_combo_features(df, race_date, client)
         return df
@@ -67,6 +70,7 @@ class RaceFeatureBuilder:
         df = self._fetch_training_grades_for_training(df, client)
         df = self._fetch_prev_odds_for_training(df)
         df = self._fetch_speed_features_for_training(df)
+        df = self._fetch_assigned_weight_for_training(df)
         return df
 
     # ──────────────────────────────────
@@ -244,6 +248,25 @@ class RaceFeatureBuilder:
             df["prev_win_odds"] = 15.0
         return df
 
+    def _fetch_current_odds(self, df: pd.DataFrame, race_date: str) -> pd.DataFrame:
+        """경주 직전 실시간 단승배당 스크래핑. 실패하면 prev_win_odds로 대체."""
+        df["current_win_odds"] = df["prev_win_odds"]
+        if not {"meet_code", "race_no", "entry_number"}.issubset(df.columns):
+            return df
+
+        for (meet_code, race_no), grp in df.groupby(["meet_code", "race_no"]):
+            odds_map = scraper_odds.fetch_race_win_odds(int(meet_code), int(race_no), race_date)
+            if not odds_map:
+                continue
+            for idx in grp.index:
+                try:
+                    entry_no = int(df.at[idx, "entry_number"])
+                except (TypeError, ValueError):
+                    continue
+                if entry_no in odds_map:
+                    df.at[idx, "current_win_odds"] = odds_map[entry_no]
+        return df
+
     def _fetch_speed_features(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
         horse_ids = df["horse_id"].dropna().unique().tolist()
         if not horse_ids:
@@ -289,15 +312,17 @@ class RaceFeatureBuilder:
         horse_ids = df["horse_id"].dropna().unique().tolist()
         if not horse_ids or "race_distance" not in df.columns:
             df["horse_win_rate_at_distance"] = 0.0
+            df["horse_speed_at_distance"] = 0.0
             return df
         res = client.table("race_entries")\
-            .select("horse_id, final_rank, races(race_distance)")\
+            .select("horse_id, final_rank, finish_time, races(race_distance)")\
             .in_("horse_id", horse_ids).lt("race_date", race_date)\
             .gt("final_rank", 0).execute()
         if res.data:
             dist_rows = [{
                 "horse_id": r["horse_id"],
                 "final_rank": r["final_rank"],
+                "finish_time": r.get("finish_time"),
                 "race_distance": (r.get("races") or {}).get("race_distance"),
             } for r in res.data]
             dist_df = pd.DataFrame(dist_rows).dropna(subset=["race_distance"])
@@ -308,13 +333,23 @@ class RaceFeatureBuilder:
             dist_stats["horse_win_rate_at_distance"] = (
                 dist_stats["_wins"] / (dist_stats["_races"] + 1)
             )
+
+            dist_df["_speed"] = pd.to_numeric(dist_df["race_distance"], errors="coerce") / \
+                pd.to_numeric(dist_df["finish_time"], errors="coerce").replace(0, np.nan)
+            speed_stats = dist_df.dropna(subset=["_speed"]).groupby(["horse_id", "race_distance"])["_speed"]\
+                .mean().reset_index(name="horse_speed_at_distance")
+            dist_stats = dist_stats.merge(speed_stats, on=["horse_id", "race_distance"], how="left")
+            dist_stats["horse_speed_at_distance"] = dist_stats["horse_speed_at_distance"].fillna(0.0)
+
             df = df.merge(
-                dist_stats[["horse_id", "race_distance", "horse_win_rate_at_distance"]],
+                dist_stats[["horse_id", "race_distance", "horse_win_rate_at_distance", "horse_speed_at_distance"]],
                 on=["horse_id", "race_distance"], how="left",
             )
             df["horse_win_rate_at_distance"] = df["horse_win_rate_at_distance"].fillna(0.0)
+            df["horse_speed_at_distance"] = df["horse_speed_at_distance"].fillna(0.0)
         else:
             df["horse_win_rate_at_distance"] = 0.0
+            df["horse_speed_at_distance"] = 0.0
         return df
 
     def _fetch_combo_features(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
@@ -532,4 +567,48 @@ class RaceFeatureBuilder:
         df["speed_figure_trend"] = df["speed_figure_trend"].fillna(0.0)
         n_valid = (df["prev_speed_figure"] > 0).sum()
         logger.info(f"prev_speed_figure 계산 완료 (유효 {n_valid}건)")
+        return df
+
+    def _fetch_assigned_weight(self, df: pd.DataFrame, client) -> pd.DataFrame:
+        if "race_id" not in df.columns or "horse_id" not in df.columns:
+            df["assigned_weight"] = 56.0
+            return df
+        race_ids = df["race_id"].dropna().unique().tolist()
+        if not race_ids:
+            df["assigned_weight"] = 56.0
+            return df
+        res = client.table("race_entry_detail")\
+            .select("race_id, horse_id, assigned_weight")\
+            .in_("race_id", race_ids).execute()
+        return self._join_assigned_weight(df, res.data or [])
+
+    def _fetch_assigned_weight_for_training(self, df: pd.DataFrame, detail_rows: list = None) -> pd.DataFrame:
+        if detail_rows is None:
+            if "race_id" not in df.columns:
+                df["assigned_weight"] = 56.0
+                return df
+            client = get_client()
+            race_ids = df["race_id"].dropna().unique().tolist()
+            all_rows = []
+            for i in range(0, len(race_ids), 500):
+                res = client.table("race_entry_detail")\
+                    .select("race_id, horse_id, assigned_weight")\
+                    .in_("race_id", race_ids[i:i + 500]).execute()
+                all_rows.extend(res.data or [])
+            detail_rows = all_rows
+        return self._join_assigned_weight(df, detail_rows)
+
+    def _join_assigned_weight(self, df: pd.DataFrame, detail_rows: list) -> pd.DataFrame:
+        if not detail_rows:
+            df["assigned_weight"] = 56.0
+            return df
+        detail_df = pd.DataFrame(detail_rows)[["race_id", "horse_id", "assigned_weight"]]
+        detail_df["assigned_weight"] = pd.to_numeric(detail_df["assigned_weight"], errors="coerce")
+        df = df.merge(detail_df, on=["race_id", "horse_id"], how="left")
+        median_weight = detail_df["assigned_weight"].median()
+        if pd.isna(median_weight):
+            median_weight = 56.0
+        n_missing = df["assigned_weight"].isna().sum()
+        df["assigned_weight"] = df["assigned_weight"].fillna(median_weight)
+        logger.info(f"assigned_weight 조인 완료 (결측 {n_missing}건 → 중앙값 {median_weight:.1f}로 대체)")
         return df

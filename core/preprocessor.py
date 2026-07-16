@@ -45,16 +45,32 @@ class RacePreprocessor:
             df["horse_weight_diff"] = 0.0
         if "horse_win_rate_at_distance" not in df.columns:
             df["horse_win_rate_at_distance"] = 0.0
+        if "horse_speed_at_distance" not in df.columns:
+            df["horse_speed_at_distance"] = 0.0
+        if "assigned_weight" not in df.columns:
+            df["assigned_weight"] = 56.0
         for col in ["horse_track_win_rate", "jockey_horse_win_rate",
                     "recent_rank_trend", "jockey_track_win_rate", "weight_trend"]:
             if col not in df.columns:
                 df[col] = 0.0
         if "prev_win_odds" not in df.columns:
             df["prev_win_odds"] = 15.0
+        if "entry_number" not in df.columns:
+            df["entry_number"] = 0
         if "prev_speed_figure" not in df.columns:
             df["prev_speed_figure"] = 0.0
         if "speed_figure_trend" not in df.columns:
             df["speed_figure_trend"] = 0.0
+        if "recent_form" not in df.columns:
+            df["recent_form"] = 0.0
+        if "experience_score" not in df.columns:
+            df["experience_score"] = 0.0
+        if "is_male" not in df.columns:
+            df["is_male"] = 0
+        if "implied_prob_vs_mean" not in df.columns:
+            df["implied_prob_vs_mean"] = 1.0
+        if "race_implied_prob_rank" not in df.columns:
+            df["race_implied_prob_rank"] = 1
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=False)
         return df
@@ -143,6 +159,7 @@ class RacePreprocessor:
             df["days_since_last_race"] = 60
             df["horse_weight_diff"] = 0.0
             df["horse_win_rate_at_distance"] = 0.0
+            df["horse_speed_at_distance"] = 0.0
             return df
 
         df = df.copy()
@@ -161,6 +178,23 @@ class RacePreprocessor:
         df["_cumwins_dist"] = (df.groupby(["horse_id", "race_distance"])["_is_win"].cumsum() - df["_is_win"])
         df["_cumraces_dist"] = df.groupby(["horse_id", "race_distance"]).cumcount()
         df["horse_win_rate_at_distance"] = df["_cumwins_dist"] / (df["_cumraces_dist"] + 1)
+
+        # 거리별 평균 속도: 현재 경주 이전 누적 (leakage 방지). 해당 거리 첫 출전은 0.0(정보 없음).
+        if "finish_time" in df.columns:
+            df["_speed"] = df["race_distance"] / df["finish_time"].replace(0, np.nan)
+            df["_speed_valid"] = df["_speed"].notna().astype(float)
+            df["_speed_filled"] = df["_speed"].fillna(0.0)
+            grp = df.groupby(["horse_id", "race_distance"])
+            df["_cum_speed_sum"] = grp["_speed_filled"].cumsum() - df["_speed_filled"]
+            df["_cum_speed_cnt"] = grp["_speed_valid"].cumsum() - df["_speed_valid"]
+            df["horse_speed_at_distance"] = np.where(
+                df["_cum_speed_cnt"] > 0,
+                df["_cum_speed_sum"] / df["_cum_speed_cnt"],
+                0.0,
+            )
+            df = df.drop(columns=["_speed", "_speed_valid", "_speed_filled", "_cum_speed_sum", "_cum_speed_cnt"])
+        else:
+            df["horse_speed_at_distance"] = 0.0
 
         df = df.drop(columns=["_rdt", "_prev_date", "_prev_weight", "_is_win", "_cumwins_dist", "_cumraces_dist"])
         return df
@@ -240,11 +274,15 @@ class RacePreprocessor:
         return df
 
     def _add_race_relative_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        if "win_odds" in df.columns:
-            odds = pd.to_numeric(df["win_odds"], errors="coerce").replace(0, np.nan)
-            df["implied_prob"] = 1.0 / odds
+        # current_win_odds 우선 사용 (예측 시 실시간 배당), 없으면 win_odds(학습 시 결과 배당) 사용
+        if "current_win_odds" in df.columns:
+            odds_src = pd.to_numeric(df["current_win_odds"], errors="coerce").replace(0, np.nan)
+        elif "win_odds" in df.columns:
+            odds_src = pd.to_numeric(df["win_odds"], errors="coerce").replace(0, np.nan)
         else:
-            df["implied_prob"] = np.nan
+            odds_src = pd.Series(np.nan, index=df.index)
+
+        df["implied_prob"] = 1.0 / odds_src
 
         if "race_id" not in df.columns:
             df["horse_class_vs_mean"] = 0.0
