@@ -69,6 +69,13 @@ def _safe_int_or_none(value):
         return None
 
 
+def _safe_ord_or_none(value):
+    """통과순위는 1등부터 시작하므로 0은 실제 순위가 아니라 "미해당"(짧은 거리에서
+    1C/2C 통과지점이 없음, 구간기록 API의 0.0과 같은 패턴)을 뜻한다. 0도 None으로 취급한다."""
+    parsed = _safe_int_or_none(value)
+    return None if parsed == 0 else parsed
+
+
 def parse_item(item: dict) -> dict | None:
     """1단계: 부담중량 + 2단계: 말/기수/조교사 통산·최근1년 성적. 3단계에서 통과순위를 추가한다.
 
@@ -97,6 +104,10 @@ def parse_item(item: dict) -> dict | None:
         "trainer_career_starts": _safe_int_or_none(item.get("trRcCntT")),
         "trainer_recent1y_wins": _safe_int_or_none(item.get("trOrd1CntY")),
         "trainer_recent1y_starts": _safe_int_or_none(item.get("trRcCntY")),
+        "sj_1c_ord": _safe_ord_or_none(item.get("sj_1cOrd")),
+        "sj_2c_ord": _safe_ord_or_none(item.get("sj_2cOrd")),
+        "sj_3c_ord": _safe_ord_or_none(item.get("sj_3cOrd")),
+        "sj_4c_ord": _safe_ord_or_none(item.get("sj_4cOrd")),
     }
 
 

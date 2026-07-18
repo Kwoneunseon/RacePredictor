@@ -634,6 +634,7 @@ class RaceFeatureBuilder:
 
         df = df.copy()
         df["_race_dt"] = pd.to_datetime(df["race_date"])
+        df["_orig_idx"] = df.index
         merged_parts = []
         for hid, grp in df.groupby("horse_id"):
             sub = sec_df[sec_df["horse_id"] == hid].sort_values("snapshot_race_date")
@@ -643,13 +644,26 @@ class RaceFeatureBuilder:
                     part[col] = np.nan
                 merged_parts.append(part)
                 continue
+            # sub의 horse_id/race_distance는 df에도 동명 컬럼이 있어 merge_asof가
+            # _x/_y로 접미사를 붙여버린다(원본 race_distance/horse_id가 사라지는 사고로
+            # 이어짐 — 2026-07-19 재학습에서 dropna(race_distance)가 대량으로 행을
+            # 지운 원인). 여기서는 이미 horse_id로 그룹핑했고 race_distance는 위에서
+            # short_mask 계산에 다 썼으므로 병합 전에 제거한다.
+            sub = sub.drop(columns=["horse_id", "race_distance"])
+            # merge_asof는 결과에 새 RangeIndex를 부여해 원본 인덱스를 버린다. 말별로
+            # 그룹핑해서 각각 merge_asof를 돌리면 말마다 인덱스가 0부터 다시 시작해
+            # concat 후 인덱스가 중복되고, 그 뒤 sort_index()가 서로 다른 말의 행을
+            # 인덱스 값 기준으로 뒤섞어버린다(_orig_idx 컬럼으로 원래 인덱스를 보존해
+            # 마지막에 복원 — 2026-07-19 인기마 기준선 수치가 흔들린 원인).
             part = pd.merge_asof(
                 grp.sort_values("_race_dt"),
                 sub.rename(columns={"snapshot_race_date": "_race_dt"}),
                 on="_race_dt", direction="backward", allow_exact_matches=False,
             )
             merged_parts.append(part)
-        df = pd.concat(merged_parts).sort_index().drop(columns=["_race_dt"])
+        df = pd.concat(merged_parts).set_index("_orig_idx").sort_index()
+        df.index.name = None
+        df = df.drop(columns=["_race_dt"])
 
         for col in section_cols:
             median_val = df[col].median()
@@ -713,6 +727,88 @@ class RaceFeatureBuilder:
             detail_rows = res.data or []
         df = self._join_section_records(df, sec_rows)
         df = self._join_career_stats(df, detail_rows)
+        return df
+
+    def _compute_running_style(self, df: pd.DataFrame, past_rows: list) -> pd.DataFrame:
+        if not past_rows or "horse_id" not in df.columns:
+            df["running_style_score"] = 0.0
+            return df
+        past_df = pd.DataFrame(past_rows)
+        # 1코너 순위 우선, 없으면(짧은 거리) 3코너 순위로 대체
+        past_df["_early_ord"] = past_df["sj_1c_ord"].fillna(past_df["sj_3c_ord"])
+        past_df = past_df.dropna(subset=["_early_ord", "final_rank"])
+        past_df["_delta"] = pd.to_numeric(past_df["_early_ord"], errors="coerce") - \
+            pd.to_numeric(past_df["final_rank"], errors="coerce")
+        style_map = past_df.groupby("horse_id")["_delta"].mean().to_dict()
+        df["running_style_score"] = df["horse_id"].map(style_map).fillna(0.0)
+        return df
+
+    def _fetch_running_style(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
+        horse_ids = df["horse_id"].dropna().unique().tolist() if "horse_id" in df.columns else []
+        if not horse_ids:
+            df["running_style_score"] = 0.0
+            return df
+        res = client.table("race_entry_detail")\
+            .select("horse_id, race_id, sj_1c_ord, sj_3c_ord, races(race_date), race_entries(final_rank)")\
+            .in_("horse_id", horse_ids).lt("races.race_date", race_date).execute()
+        rows = [{
+            "horse_id": r["horse_id"],
+            "sj_1c_ord": r.get("sj_1c_ord"),
+            "sj_3c_ord": r.get("sj_3c_ord"),
+            "final_rank": (r.get("race_entries") or {}).get("final_rank"),
+        } for r in (res.data or [])]
+        return self._compute_running_style(df, rows)
+
+    def _fetch_running_style_for_training(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "horse_id" not in df.columns or "race_date" not in df.columns:
+            df["running_style_score"] = 0.0
+            return df
+        client = get_client()
+        horse_ids = df["horse_id"].dropna().unique().tolist()
+        all_rows = []
+        for i in range(0, len(horse_ids), 500):
+            res = client.table("race_entry_detail")\
+                .select("horse_id, race_id, sj_1c_ord, sj_3c_ord")\
+                .in_("horse_id", horse_ids[i:i + 500]).execute()
+            all_rows.extend(res.data or [])
+        if not all_rows:
+            df["running_style_score"] = 0.0
+            return df
+        detail_df = pd.DataFrame(all_rows)
+        race_ids = detail_df["race_id"].unique().tolist()
+        rank_rows = []
+        for i in range(0, len(race_ids), 500):
+            res = client.table("race_entries").select("race_id, horse_id, race_date, final_rank")\
+                .in_("race_id", race_ids[i:i + 500]).execute()
+            rank_rows.extend(res.data or [])
+        rank_df = pd.DataFrame(rank_rows)
+        merged = detail_df.merge(rank_df, on=["race_id", "horse_id"], how="inner")
+
+        df = df.copy()
+        df["_race_dt"] = pd.to_datetime(df["race_date"])
+        merged["_race_dt"] = pd.to_datetime(merged["race_date"])
+        parts = []
+        for hid, grp in df.groupby("horse_id"):
+            past = merged[merged["horse_id"] == hid]
+            part = grp.copy()
+            style_vals = []
+            for _, row in grp.iterrows():
+                past_before = past[past["_race_dt"] < row["_race_dt"]]
+                if past_before.empty:
+                    style_vals.append(0.0)
+                    continue
+                sub_df = past_before.copy()
+                sub_df["_early_ord"] = sub_df["sj_1c_ord"].fillna(sub_df["sj_3c_ord"])
+                sub_df = sub_df.dropna(subset=["_early_ord", "final_rank"])
+                if sub_df.empty:
+                    style_vals.append(0.0)
+                    continue
+                delta = pd.to_numeric(sub_df["_early_ord"], errors="coerce") - \
+                    pd.to_numeric(sub_df["final_rank"], errors="coerce")
+                style_vals.append(float(delta.mean()))
+            part["running_style_score"] = style_vals
+            parts.append(part)
+        df = pd.concat(parts).sort_index().drop(columns=["_race_dt"])
         return df
 
     def _fetch_section_and_career_features_for_training(self, df: pd.DataFrame) -> pd.DataFrame:

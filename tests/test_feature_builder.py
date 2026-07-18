@@ -262,3 +262,37 @@ def test_horse_career_win_rate_uses_starts_as_denominator():
     result = fb._join_career_stats(df, detail_rows)
     assert result.loc[0, "horse_career_win_rate"] == 0.3
     assert result.loc[0, "jockey_recent1y_win_rate"] == 0.125
+
+
+# ──────────────────────────────────────────────
+# 3단계: 러닝스타일 (코너별 통과순위)
+# ──────────────────────────────────────────────
+def test_running_style_score_positive_means_closer():
+    import pandas as pd
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({
+        "horse_id": ["H1"], "race_date": ["2026-07-12"],
+    })
+    # 과거 2경주: 1코너 5위→최종 2위(3계단 추입), 1코너 6위→최종 1위(5계단 추입)
+    past_rows = [
+        {"horse_id": "H1", "race_date": "2026-06-01", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 2},
+        {"horse_id": "H1", "race_date": "2026-06-15", "sj_1c_ord": 6, "sj_3c_ord": 5, "final_rank": 1},
+    ]
+    result = fb._compute_running_style(df, past_rows)
+    assert result.loc[0, "running_style_score"] == pytest.approx((5 - 2 + 6 - 1) / 2)
+
+
+def test_running_style_score_falls_back_to_3c_when_1c_not_applicable():
+    import pandas as pd
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({
+        "horse_id": ["H1"], "race_date": ["2026-07-12"],
+    })
+    # 짧은 거리라 1C 없음(None) → 3C(4위) 기준으로 계산해야 함: 4 - 2 = 2
+    past_rows = [
+        {"horse_id": "H1", "race_date": "2026-06-01", "sj_1c_ord": None, "sj_3c_ord": 4, "final_rank": 2},
+    ]
+    result = fb._compute_running_style(df, past_rows)
+    assert result.loc[0, "running_style_score"] == pytest.approx(2.0)
