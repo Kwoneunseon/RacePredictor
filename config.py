@@ -78,13 +78,14 @@ FEATURE_COLUMNS = [
     # 부담중량: 1단계 체크포인트에서 개선 미확인으로 제외 (2026-07-18, 단승 +0.7pp는 노이즈 범위,
     # 연승 -1.2pp 하락 — docs/superpowers/plans/2026-07-15-new-race-signal-features-plan.md Task 4 참고)
     # "assigned_weight",
-    # 구간기록 (2단계)
-    "s1f_avg", "c1_avg", "c2_avg", "c3_avg", "c4_avg", "g3f_avg", "g1f_avg",
-    # 통산·최근1년 성적 (2단계) — 말의 "최근1년" 필드는 API에 없어 통산만 포함
-    "horse_career_win_rate",
-    "jockey_career_win_rate", "jockey_recent1y_win_rate",
-    "trainer_career_win_rate", "trainer_recent1y_win_rate",
-    "jockey_recent1y_starts", "trainer_recent1y_starts",
+    # 구간기록·통산/최근1년 성적: 2단계 체크포인트에서 개선 미확인으로 제외
+    # (2026-07-19, 단승 -0.5pp/연승 -0.7pp — 둘 다 노이즈 범위(n=408, 표준오차 약 ±2.4pp)이나
+    # 개선이 없어 계획서 기준대로 제외. docs/superpowers/plans/2026-07-15-new-race-signal-features-plan.md Task 8 참고)
+    # "s1f_avg", "c1_avg", "c2_avg", "c3_avg", "c4_avg", "g3f_avg", "g1f_avg",
+    # "horse_career_win_rate",
+    # "jockey_career_win_rate", "jockey_recent1y_win_rate",
+    # "trainer_career_win_rate", "trainer_recent1y_win_rate",
+    # "jockey_recent1y_starts", "trainer_recent1y_starts",
     # 출발 게이트 번호 (안쪽 레인 이점)
     "entry_number",
     # 직전 경주 배당 (경마 전날부터 이용 가능한 시장 신호)
