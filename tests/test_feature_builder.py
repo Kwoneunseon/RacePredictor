@@ -219,3 +219,46 @@ def test_build_for_prediction_uses_scraped_odds():
         result = fb.build_for_prediction("2026-06-07")
 
     assert result["current_win_odds"].iloc[0] == pytest.approx(5.3)
+
+
+# ──────────────────────────────────────────────
+# 2단계: 구간기록·통산/최근1년 성적
+# ──────────────────────────────────────────────
+def test_fetch_section_features_treats_zero_corner_as_not_applicable():
+    import pandas as pd
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({
+        "horse_id": ["H1"],
+        "race_date": ["2026-07-12"],
+        "race_distance": [1000],  # 임계값 미만 → 1C/2C 미해당
+    })
+    section_rows = [{
+        "horse_id": "H1", "race_distance": 1000, "snapshot_race_date": "2026-07-01",
+        "c1_avg": 0.0, "c2_avg": 0.0, "c3_avg": 30.0, "c4_avg": 49.0,
+        "s1f_avg": 13.9, "g3f_avg": 37.8, "g1f_avg": 13.5,
+    }]
+    result = fb._join_section_records(df, section_rows)
+    assert result.loc[0, "c3_avg"] == 30.0
+    assert result.loc[0, "g1f_avg"] == 13.5
+
+
+def test_horse_career_win_rate_uses_starts_as_denominator():
+    import pandas as pd
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({
+        "race_id": ["R1"], "horse_id": ["H1"],
+    })
+    detail_rows = [{
+        "race_id": "R1", "horse_id": "H1",
+        "horse_career_wins": 3, "horse_career_starts": 10,
+        "jockey_career_wins": 50, "jockey_career_starts": 500,
+        "jockey_recent1y_wins": 5, "jockey_recent1y_starts": 40,
+        "trainer_career_wins": 20, "trainer_career_starts": 300,
+        "trainer_recent1y_wins": 2, "trainer_recent1y_starts": 30,
+        "assigned_weight": 56.0,
+    }]
+    result = fb._join_career_stats(df, detail_rows)
+    assert result.loc[0, "horse_career_win_rate"] == 0.3
+    assert result.loc[0, "jockey_recent1y_win_rate"] == 0.125

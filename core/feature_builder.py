@@ -7,6 +7,8 @@ from Utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_SECTION_CORNER_APPLICABLE_DISTANCE = 1300  # 이 값 미만 거리는 1C/2C 데이터 없음 (라이브 API 실측으로 확정)
+
 
 def _training_grade(remk_txt: str) -> int:
     """조교 평가 텍스트 → 수치 등급. 양호=2, 기록없음=1, 불량계열=0"""
@@ -59,6 +61,7 @@ class RaceFeatureBuilder:
         df = self._fetch_current_odds(df, race_date)
         df = self._fetch_speed_features(df, race_date, client)
         df = self._fetch_assigned_weight(df, client)
+        df = self._fetch_section_and_career_features(df, client)
         df = self._fetch_distance_rates(df, race_date, client)
         df = self._fetch_combo_features(df, race_date, client)
         return df
@@ -71,6 +74,7 @@ class RaceFeatureBuilder:
         df = self._fetch_prev_odds_for_training(df)
         df = self._fetch_speed_features_for_training(df)
         df = self._fetch_assigned_weight_for_training(df)
+        df = self._fetch_section_and_career_features_for_training(df)
         return df
 
     # ──────────────────────────────────
@@ -611,4 +615,127 @@ class RaceFeatureBuilder:
         n_missing = df["assigned_weight"].isna().sum()
         df["assigned_weight"] = df["assigned_weight"].fillna(median_weight)
         logger.info(f"assigned_weight 조인 완료 (결측 {n_missing}건 → 중앙값 {median_weight:.1f}로 대체)")
+        return df
+
+    def _join_section_records(self, df: pd.DataFrame, section_rows: list) -> pd.DataFrame:
+        section_cols = [
+            "s1f_avg", "c1_avg", "c2_avg", "c3_avg", "c4_avg", "g3f_avg", "g1f_avg",
+        ]
+        if not section_rows or "horse_id" not in df.columns or "race_date" not in df.columns:
+            for col in section_cols:
+                df[col] = 0.0
+            return df
+
+        sec_df = pd.DataFrame(section_rows)
+        sec_df["snapshot_race_date"] = pd.to_datetime(sec_df["snapshot_race_date"])
+        # 짧은 거리는 1C/2C가 0으로 나옴 → 실제 기록이 아니라 "미해당" 이므로 NaN 처리
+        short_mask = sec_df["race_distance"] < _SECTION_CORNER_APPLICABLE_DISTANCE
+        sec_df.loc[short_mask, ["c1_avg", "c2_avg"]] = np.nan
+
+        df = df.copy()
+        df["_race_dt"] = pd.to_datetime(df["race_date"])
+        merged_parts = []
+        for hid, grp in df.groupby("horse_id"):
+            sub = sec_df[sec_df["horse_id"] == hid].sort_values("snapshot_race_date")
+            if sub.empty:
+                part = grp.copy()
+                for col in section_cols:
+                    part[col] = np.nan
+                merged_parts.append(part)
+                continue
+            part = pd.merge_asof(
+                grp.sort_values("_race_dt"),
+                sub.rename(columns={"snapshot_race_date": "_race_dt"}),
+                on="_race_dt", direction="backward", allow_exact_matches=False,
+            )
+            merged_parts.append(part)
+        df = pd.concat(merged_parts).sort_index().drop(columns=["_race_dt"])
+
+        for col in section_cols:
+            median_val = df[col].median()
+            if pd.isna(median_val):
+                median_val = 0.0
+            n_missing = df[col].isna().sum()
+            df[col] = df[col].fillna(median_val)
+            if n_missing:
+                logger.info(f"{col} 결측 {n_missing}건 → 중앙값 {median_val:.2f}로 대체")
+        return df
+
+    def _join_career_stats(self, df: pd.DataFrame, detail_rows: list) -> pd.DataFrame:
+        # horse_recent1y_wins/starts는 API에 소스 필드가 없어 항상 NULL이므로
+        # (library/collector_race_detail.py parse_item 참고) 여기서 다루지 않는다.
+        rate_specs = [
+            ("horse_career_win_rate", "horse_career_wins", "horse_career_starts"),
+            ("jockey_career_win_rate", "jockey_career_wins", "jockey_career_starts"),
+            ("jockey_recent1y_win_rate", "jockey_recent1y_wins", "jockey_recent1y_starts"),
+            ("trainer_career_win_rate", "trainer_career_wins", "trainer_career_starts"),
+            ("trainer_recent1y_win_rate", "trainer_recent1y_wins", "trainer_recent1y_starts"),
+        ]
+        sample_cols = ["jockey_recent1y_starts", "trainer_recent1y_starts"]
+        if not detail_rows or "race_id" not in df.columns or "horse_id" not in df.columns:
+            for rate_col, _, _ in rate_specs:
+                df[rate_col] = 0.0
+            for col in sample_cols:
+                df[col] = 0.0
+            return df
+
+        detail_df = pd.DataFrame(detail_rows)
+        needed_cols = [c for _, w, s in rate_specs for c in (w, s) if c in detail_df.columns]
+        df = df.merge(
+            detail_df[["race_id", "horse_id"] + needed_cols].drop_duplicates(),
+            on=["race_id", "horse_id"], how="left",
+        )
+        for rate_col, win_col, start_col in rate_specs:
+            if start_col not in df.columns or win_col not in df.columns:
+                df[rate_col] = 0.0
+                continue
+            starts = pd.to_numeric(df[start_col], errors="coerce")
+            wins = pd.to_numeric(df[win_col], errors="coerce")
+            df[rate_col] = (wins / starts.replace(0, np.nan)).fillna(0.0)
+        for col in sample_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0) if col in df.columns else 0.0
+        return df
+
+    def _fetch_section_and_career_features(self, df: pd.DataFrame, client) -> pd.DataFrame:
+        horse_ids = df["horse_id"].dropna().unique().tolist() if "horse_id" in df.columns else []
+        race_ids = df["race_id"].dropna().unique().tolist() if "race_id" in df.columns else []
+        sec_rows, detail_rows = [], []
+        if horse_ids:
+            res = client.table("horse_section_records").select("*").in_("horse_id", horse_ids).execute()
+            sec_rows = res.data or []
+        if race_ids:
+            res = client.table("race_entry_detail").select(
+                "race_id, horse_id, horse_career_wins, horse_career_starts, "
+                "jockey_career_wins, jockey_career_starts, "
+                "jockey_recent1y_wins, jockey_recent1y_starts, trainer_career_wins, trainer_career_starts, "
+                "trainer_recent1y_wins, trainer_recent1y_starts"
+            ).in_("race_id", race_ids).execute()
+            detail_rows = res.data or []
+        df = self._join_section_records(df, sec_rows)
+        df = self._join_career_stats(df, detail_rows)
+        return df
+
+    def _fetch_section_and_career_features_for_training(self, df: pd.DataFrame) -> pd.DataFrame:
+        client = get_client()
+        horse_ids = df["horse_id"].dropna().unique().tolist() if "horse_id" in df.columns else []
+        race_ids = df["race_id"].dropna().unique().tolist() if "race_id" in df.columns else []
+
+        sec_rows = []
+        for i in range(0, len(horse_ids), 500):
+            res = client.table("horse_section_records").select("*")\
+                .in_("horse_id", horse_ids[i:i + 500]).execute()
+            sec_rows.extend(res.data or [])
+
+        detail_rows = []
+        for i in range(0, len(race_ids), 500):
+            res = client.table("race_entry_detail").select(
+                "race_id, horse_id, horse_career_wins, horse_career_starts, "
+                "jockey_career_wins, jockey_career_starts, "
+                "jockey_recent1y_wins, jockey_recent1y_starts, trainer_career_wins, trainer_career_starts, "
+                "trainer_recent1y_wins, trainer_recent1y_starts"
+            ).in_("race_id", race_ids[i:i + 500]).execute()
+            detail_rows.extend(res.data or [])
+
+        df = self._join_section_records(df, sec_rows)
+        df = self._join_career_stats(df, detail_rows)
         return df

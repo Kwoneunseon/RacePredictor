@@ -49,6 +49,13 @@ class RacePreprocessor:
             df["horse_speed_at_distance"] = 0.0
         if "assigned_weight" not in df.columns:
             df["assigned_weight"] = 56.0
+        for col in ["s1f_avg", "c1_avg", "c2_avg", "c3_avg", "c4_avg", "g3f_avg", "g1f_avg",
+                    "horse_career_win_rate",
+                    "jockey_career_win_rate", "jockey_recent1y_win_rate",
+                    "trainer_career_win_rate", "trainer_recent1y_win_rate",
+                    "jockey_recent1y_starts", "trainer_recent1y_starts"]:
+            if col not in df.columns:
+                df[col] = 0.0
         for col in ["horse_track_win_rate", "jockey_horse_win_rate",
                     "recent_rank_trend", "jockey_track_win_rate", "weight_trend"]:
             if col not in df.columns:
