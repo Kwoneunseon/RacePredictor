@@ -60,8 +60,25 @@ def _build_race_id(item: dict) -> str | None:
     return f"{race_date}_{meet_str}_{race_no}"
 
 
+def _safe_int_or_none(value):
+    """safe_int는 0을 falsy로 취급해 default로 치환해버리므로(승수 0은 유효값),
+    성적 필드 파싱에는 이 헬퍼를 쓴다."""
+    try:
+        return int(value) if value not in (None, "", "-") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_item(item: dict) -> dict | None:
-    """1단계: assigned_weight(wgBudam)만 파싱한다. 2·3단계에서 이 함수를 확장한다."""
+    """1단계: 부담중량 + 2단계: 말/기수/조교사 통산·최근1년 성적. 3단계에서 통과순위를 추가한다.
+
+    라이브 API 확인 결과(2026-07-19), 계획서가 가정한 ord1CntT/ord1CntY/rcCntT/rcCntY는
+    말의 성적이 아니다(값이 항상 T==Y이고 비정상적으로 작음 — 용도 불명, 사용하지 않음).
+    말의 실제 통산 성적은 hrOrd1CntT(통산 1착)/hrOrd2CntT(통산 2착)/hrRcCntT(통산 출전)이며,
+    이 API에는 말의 "최근 1년" 성적 필드가 존재하지 않는다(Y variant 없음) — 그래서
+    horse_recent1y_wins/starts는 채우지 않고 NULL로 남긴다. 기수/조교사는 T/Y 필드가
+    모두 존재하고 통산>=최근1년 관계도 확인되어 계획대로 사용한다.
+    """
     race_id = _build_race_id(item)
     horse_id = safe_str(item.get("hrNo"))
     if not race_id or not horse_id:
@@ -70,6 +87,16 @@ def parse_item(item: dict) -> dict | None:
         "race_id": race_id,
         "horse_id": horse_id,
         "assigned_weight": safe_float(item.get("wgBudam"), default=None),
+        "horse_career_wins": _safe_int_or_none(item.get("hrOrd1CntT")),
+        "horse_career_starts": _safe_int_or_none(item.get("hrRcCntT")),
+        "jockey_career_wins": _safe_int_or_none(item.get("jkOrd1CntT")),
+        "jockey_career_starts": _safe_int_or_none(item.get("jkRcCntT")),
+        "jockey_recent1y_wins": _safe_int_or_none(item.get("jkOrd1CntY")),
+        "jockey_recent1y_starts": _safe_int_or_none(item.get("jkRcCntY")),
+        "trainer_career_wins": _safe_int_or_none(item.get("trOrd1CntT")),
+        "trainer_career_starts": _safe_int_or_none(item.get("trRcCntT")),
+        "trainer_recent1y_wins": _safe_int_or_none(item.get("trOrd1CntY")),
+        "trainer_recent1y_starts": _safe_int_or_none(item.get("trRcCntY")),
     }
 
 
