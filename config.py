@@ -75,20 +75,22 @@ FEATURE_COLUMNS = [
     "prev_speed_figure", "speed_figure_trend", "horse_speed_at_distance",
     # 추세
     "recent_rank_trend", "weight_trend",
-    # 부담중량: 1단계 체크포인트에서 개선 미확인으로 제외 (2026-07-18, 단승 +0.7pp는 노이즈 범위,
-    # 연승 -1.2pp 하락 — docs/superpowers/plans/2026-07-15-new-race-signal-features-plan.md Task 4 참고)
+    # 2026-07-20 최종 재검증: 최초 1~3단계 체크포인트는 두 가지 버그로 무효였음을 발견.
+    # (1) 부산경남 경주(전체의 30.7%)가 race_id 트랙 라벨 불일치("부산경남" vs API299의
+    #     "부경")로 신규 피처 조인이 처음부터 실패 → library/collector_race_detail.py에서
+    #     meet 코드 기반 canonical 라벨로 수정.
+    # (2) feature_builder의 학습용 배치 조회(500개씩 청크)가 PostgREST의 기본 1000행 응답
+    #     제한에 걸려, 한 청크에 실제 일치하는 행이 1000건을 넘으면 나머지가 조용히
+    #     잘려나감 → _fetch_in_batches 헬퍼로 청크 내부까지 range() 페이지네이션하도록 수정.
+    # 두 버그 모두 고치고 재백필 후 3개 피처군을 한 번에 켜서 재검증한 결과도 개선 없음
+    # (단승 42.9%→42.4%/-0.5pp, 연승@0.65 79.9%/69.6%→77.7%/73.5%) — 노이즈 범위 내이거나
+    # 오히려 소폭 하락. 데이터 품질 문제 없이 검증된 결과이므로 이번엔 신뢰도 높게 제외.
     # "assigned_weight",
-    # 구간기록·통산/최근1년 성적: 2단계 체크포인트에서 개선 미확인으로 제외
-    # (2026-07-19, 단승 -0.5pp/연승 -0.7pp — 둘 다 노이즈 범위(n=408, 표준오차 약 ±2.4pp)이나
-    # 개선이 없어 계획서 기준대로 제외. docs/superpowers/plans/2026-07-15-new-race-signal-features-plan.md Task 8 참고)
     # "s1f_avg", "c1_avg", "c2_avg", "c3_avg", "c4_avg", "g3f_avg", "g1f_avg",
     # "horse_career_win_rate",
     # "jockey_career_win_rate", "jockey_recent1y_win_rate",
     # "trainer_career_win_rate", "trainer_recent1y_win_rate",
     # "jockey_recent1y_starts", "trainer_recent1y_starts",
-    # 러닝스타일 (초반 코너순위 - 최종순위, 양수=추입형): 3단계 체크포인트에서 개선 미확인으로 제외
-    # (2026-07-19, 단승 41.9%→42.9%/+1.0pp, 연승@0.65 79.1%/74.0%→79.6%/72.1% — 둘 다 n=408
-    # 표준오차 ±2.4pp 범위 내. docs/superpowers/plans/2026-07-15-new-race-signal-features-plan.md Task 10 참고)
     # "running_style_score",
     # 출발 게이트 번호 (안쪽 레인 이점)
     "entry_number",
