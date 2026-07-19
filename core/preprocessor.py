@@ -56,6 +56,8 @@ class RacePreprocessor:
                     "jockey_recent1y_starts", "trainer_recent1y_starts"]:
             if col not in df.columns:
                 df[col] = 0.0
+        if "running_style_score" not in df.columns:
+            df["running_style_score"] = 0.0
         for col in ["horse_track_win_rate", "jockey_horse_win_rate",
                     "recent_rank_trend", "jockey_track_win_rate", "weight_trend"]:
             if col not in df.columns:

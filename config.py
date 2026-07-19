@@ -86,6 +86,8 @@ FEATURE_COLUMNS = [
     # "jockey_career_win_rate", "jockey_recent1y_win_rate",
     # "trainer_career_win_rate", "trainer_recent1y_win_rate",
     # "jockey_recent1y_starts", "trainer_recent1y_starts",
+    # 러닝스타일 (초반 코너순위 - 최종순위, 양수=추입형) — 3단계
+    "running_style_score",
     # 출발 게이트 번호 (안쪽 레인 이점)
     "entry_number",
     # 직전 경주 배당 (경마 전날부터 이용 가능한 시장 신호)

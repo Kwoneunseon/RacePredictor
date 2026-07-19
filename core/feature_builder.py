@@ -62,6 +62,7 @@ class RaceFeatureBuilder:
         df = self._fetch_speed_features(df, race_date, client)
         df = self._fetch_assigned_weight(df, client)
         df = self._fetch_section_and_career_features(df, client)
+        df = self._fetch_running_style(df, race_date, client)
         df = self._fetch_distance_rates(df, race_date, client)
         df = self._fetch_combo_features(df, race_date, client)
         return df
@@ -75,6 +76,7 @@ class RaceFeatureBuilder:
         df = self._fetch_speed_features_for_training(df)
         df = self._fetch_assigned_weight_for_training(df)
         df = self._fetch_section_and_career_features_for_training(df)
+        df = self._fetch_running_style_for_training(df)
         return df
 
     # ──────────────────────────────────
@@ -744,19 +746,37 @@ class RaceFeatureBuilder:
         return df
 
     def _fetch_running_style(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
+        # race_entry_detail에는 races/race_entries로의 FK 제약이 없어 PostgREST
+        # 임베디드 조인(races(...), race_entries(...))이 스키마캐시에서 관계를
+        # 찾지 못해 실패한다(PGRST200). 학습용(_fetch_running_style_for_training)과
+        # 동일하게 수동으로 두 번 조회해 파이썬에서 조인한다.
         horse_ids = df["horse_id"].dropna().unique().tolist() if "horse_id" in df.columns else []
         if not horse_ids:
             df["running_style_score"] = 0.0
             return df
-        res = client.table("race_entry_detail")\
-            .select("horse_id, race_id, sj_1c_ord, sj_3c_ord, races(race_date), race_entries(final_rank)")\
-            .in_("horse_id", horse_ids).lt("races.race_date", race_date).execute()
-        rows = [{
-            "horse_id": r["horse_id"],
-            "sj_1c_ord": r.get("sj_1c_ord"),
-            "sj_3c_ord": r.get("sj_3c_ord"),
-            "final_rank": (r.get("race_entries") or {}).get("final_rank"),
-        } for r in (res.data or [])]
+        detail_res = client.table("race_entry_detail")\
+            .select("horse_id, race_id, sj_1c_ord, sj_3c_ord")\
+            .in_("horse_id", horse_ids).execute()
+        detail_rows = detail_res.data or []
+        if not detail_rows:
+            df["running_style_score"] = 0.0
+            return df
+        race_ids = list({r["race_id"] for r in detail_rows})
+        rank_res = client.table("race_entries")\
+            .select("race_id, horse_id, race_date, final_rank")\
+            .in_("race_id", race_ids).lt("race_date", race_date).execute()
+        rank_map = {(r["race_id"], r["horse_id"]): r for r in (rank_res.data or [])}
+        rows = []
+        for r in detail_rows:
+            rank_row = rank_map.get((r["race_id"], r["horse_id"]))
+            if rank_row is None:
+                continue
+            rows.append({
+                "horse_id": r["horse_id"],
+                "sj_1c_ord": r.get("sj_1c_ord"),
+                "sj_3c_ord": r.get("sj_3c_ord"),
+                "final_rank": rank_row.get("final_rank"),
+            })
         return self._compute_running_style(df, rows)
 
     def _fetch_running_style_for_training(self, df: pd.DataFrame) -> pd.DataFrame:
