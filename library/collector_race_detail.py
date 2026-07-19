@@ -17,6 +17,13 @@ logger = get_logger(__name__)
 
 ENDPOINT = "https://apis.data.go.kr/B551015/API299/Race_Result_total"
 
+# race_entries/races 테이블의 race_id는 "부산경남"을 쓰는데(library/collector_races.py의
+# MEET_CODE_MAP 참고), API299는 같은 트랙을 "부경"으로 반환한다. item.get("meet")을 그대로
+# race_id에 쓰면 부산경남 경주(전체의 약 31%)가 항상 조인 실패해 신규 피처가 전부 결측으로
+# 빠지는 사고로 이어진다(2026-07-20 발견). 요청 시점에 이미 알고 있는 meet 코드로 canonical
+# 라벨을 강제해 이 불일치를 원천 차단한다.
+MEET_LABEL = {1: "서울", 2: "제주", 3: "부산경남"}
+
 
 def fetch_race_detail(meet: int, rc_date: str, page: int = 1, per_page: int = 200):
     """
@@ -51,9 +58,9 @@ def fetch_race_detail(meet: int, rc_date: str, page: int = 1, per_page: int = 20
         return None
 
 
-def _build_race_id(item: dict) -> str | None:
+def _build_race_id(item: dict, meet: int) -> str | None:
     race_date = parse_date(item.get("rcDate"))
-    meet_str = safe_str(item.get("meet"))
+    meet_str = MEET_LABEL.get(meet)
     race_no = safe_int(item.get("rcNo"))
     if not race_date or not meet_str or not race_no:
         return None
@@ -76,7 +83,7 @@ def _safe_ord_or_none(value):
     return None if parsed == 0 else parsed
 
 
-def parse_item(item: dict) -> dict | None:
+def parse_item(item: dict, meet: int) -> dict | None:
     """1단계: 부담중량 + 2단계: 말/기수/조교사 통산·최근1년 성적. 3단계에서 통과순위를 추가한다.
 
     라이브 API 확인 결과(2026-07-19), 계획서가 가정한 ord1CntT/ord1CntY/rcCntT/rcCntY는
@@ -85,8 +92,11 @@ def parse_item(item: dict) -> dict | None:
     이 API에는 말의 "최근 1년" 성적 필드가 존재하지 않는다(Y variant 없음) — 그래서
     horse_recent1y_wins/starts는 채우지 않고 NULL로 남긴다. 기수/조교사는 T/Y 필드가
     모두 존재하고 통산>=최근1년 관계도 확인되어 계획대로 사용한다.
+
+    meet: 요청한 경마장 코드(1/2/3). race_id의 트랙 라벨은 item.get("meet")이 아니라
+    이 코드로 정규화한다(MEET_LABEL 주석 참고).
     """
-    race_id = _build_race_id(item)
+    race_id = _build_race_id(item, meet)
     horse_id = safe_str(item.get("hrNo"))
     if not race_id or not horse_id:
         return None
@@ -135,7 +145,7 @@ def collect_meet_date(meet: int, rc_date: str) -> int:
         if not items:
             break
         for it in items:
-            parsed = parse_item(it)
+            parsed = parse_item(it, meet)
             if parsed:
                 rows_by_key[(parsed["race_id"], parsed["horse_id"])] = parsed
         if len(items) < 200:
