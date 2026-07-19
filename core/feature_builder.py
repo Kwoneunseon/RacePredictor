@@ -10,6 +10,30 @@ logger = get_logger(__name__)
 _SECTION_CORNER_APPLICABLE_DISTANCE = 1300  # 이 값 미만 거리는 1C/2C 데이터 없음 (라이브 API 실측으로 확정)
 
 
+def _fetch_in_batches(client, table: str, select_cols: str, in_col: str, values: list,
+                       chunk_size: int = 500, page_size: int = 1000, filter_fn=None) -> list:
+    """PostgREST는 명시적으로 range()를 걸지 않으면 응답을 기본 최대 행수(보통 1000)로
+    자른다. in_col IN values 조회를 값 리스트만 chunk_size로 나누고 range() 없이 쏘면,
+    한 청크에 실제로 일치하는 행이 1000건을 넘을 때 나머지가 조용히 잘려나간다
+    (2026-07-20 발견 — 신규 피처 학습용 조인이 대부분 결측으로 빠지던 근본 원인).
+    청크 분할 + 청크 내부 range() 페이지네이션을 함께 해야 안전하다."""
+    rows = []
+    for i in range(0, len(values), chunk_size):
+        chunk = values[i:i + chunk_size]
+        offset = 0
+        while True:
+            q = client.table(table).select(select_cols).in_(in_col, chunk)
+            if filter_fn:
+                q = filter_fn(q)
+            res = q.range(offset, offset + page_size - 1).execute()
+            data = res.data or []
+            rows.extend(data)
+            if len(data) < page_size:
+                break
+            offset += page_size
+    return rows
+
+
 def _training_grade(remk_txt: str) -> int:
     """조교 평가 텍스트 → 수치 등급. 양호=2, 기록없음=1, 불량계열=0"""
     s = str(remk_txt).strip()
@@ -583,10 +607,9 @@ class RaceFeatureBuilder:
         if not race_ids:
             df["assigned_weight"] = 56.0
             return df
-        res = client.table("race_entry_detail")\
-            .select("race_id, horse_id, assigned_weight")\
-            .in_("race_id", race_ids).execute()
-        return self._join_assigned_weight(df, res.data or [])
+        rows = _fetch_in_batches(client, "race_entry_detail", "race_id, horse_id, assigned_weight",
+                                  "race_id", race_ids)
+        return self._join_assigned_weight(df, rows)
 
     def _fetch_assigned_weight_for_training(self, df: pd.DataFrame, detail_rows: list = None) -> pd.DataFrame:
         if detail_rows is None:
@@ -595,13 +618,8 @@ class RaceFeatureBuilder:
                 return df
             client = get_client()
             race_ids = df["race_id"].dropna().unique().tolist()
-            all_rows = []
-            for i in range(0, len(race_ids), 500):
-                res = client.table("race_entry_detail")\
-                    .select("race_id, horse_id, assigned_weight")\
-                    .in_("race_id", race_ids[i:i + 500]).execute()
-                all_rows.extend(res.data or [])
-            detail_rows = all_rows
+            detail_rows = _fetch_in_batches(client, "race_entry_detail",
+                                             "race_id, horse_id, assigned_weight", "race_id", race_ids)
         return self._join_assigned_weight(df, detail_rows)
 
     def _join_assigned_weight(self, df: pd.DataFrame, detail_rows: list) -> pd.DataFrame:
@@ -717,16 +735,15 @@ class RaceFeatureBuilder:
         race_ids = df["race_id"].dropna().unique().tolist() if "race_id" in df.columns else []
         sec_rows, detail_rows = [], []
         if horse_ids:
-            res = client.table("horse_section_records").select("*").in_("horse_id", horse_ids).execute()
-            sec_rows = res.data or []
+            sec_rows = _fetch_in_batches(client, "horse_section_records", "*", "horse_id", horse_ids)
         if race_ids:
-            res = client.table("race_entry_detail").select(
+            detail_rows = _fetch_in_batches(
+                client, "race_entry_detail",
                 "race_id, horse_id, horse_career_wins, horse_career_starts, "
                 "jockey_career_wins, jockey_career_starts, "
                 "jockey_recent1y_wins, jockey_recent1y_starts, trainer_career_wins, trainer_career_starts, "
-                "trainer_recent1y_wins, trainer_recent1y_starts"
-            ).in_("race_id", race_ids).execute()
-            detail_rows = res.data or []
+                "trainer_recent1y_wins, trainer_recent1y_starts",
+                "race_id", race_ids)
         df = self._join_section_records(df, sec_rows)
         df = self._join_career_stats(df, detail_rows)
         return df
@@ -754,18 +771,16 @@ class RaceFeatureBuilder:
         if not horse_ids:
             df["running_style_score"] = 0.0
             return df
-        detail_res = client.table("race_entry_detail")\
-            .select("horse_id, race_id, sj_1c_ord, sj_3c_ord")\
-            .in_("horse_id", horse_ids).execute()
-        detail_rows = detail_res.data or []
+        detail_rows = _fetch_in_batches(client, "race_entry_detail",
+                                         "horse_id, race_id, sj_1c_ord, sj_3c_ord", "horse_id", horse_ids)
         if not detail_rows:
             df["running_style_score"] = 0.0
             return df
         race_ids = list({r["race_id"] for r in detail_rows})
-        rank_res = client.table("race_entries")\
-            .select("race_id, horse_id, race_date, final_rank")\
-            .in_("race_id", race_ids).lt("race_date", race_date).execute()
-        rank_map = {(r["race_id"], r["horse_id"]): r for r in (rank_res.data or [])}
+        rank_rows = _fetch_in_batches(
+            client, "race_entries", "race_id, horse_id, race_date, final_rank", "race_id", race_ids,
+            filter_fn=lambda q: q.lt("race_date", race_date))
+        rank_map = {(r["race_id"], r["horse_id"]): r for r in rank_rows}
         rows = []
         for r in detail_rows:
             rank_row = rank_map.get((r["race_id"], r["horse_id"]))
@@ -785,22 +800,15 @@ class RaceFeatureBuilder:
             return df
         client = get_client()
         horse_ids = df["horse_id"].dropna().unique().tolist()
-        all_rows = []
-        for i in range(0, len(horse_ids), 500):
-            res = client.table("race_entry_detail")\
-                .select("horse_id, race_id, sj_1c_ord, sj_3c_ord")\
-                .in_("horse_id", horse_ids[i:i + 500]).execute()
-            all_rows.extend(res.data or [])
+        all_rows = _fetch_in_batches(client, "race_entry_detail",
+                                      "horse_id, race_id, sj_1c_ord, sj_3c_ord", "horse_id", horse_ids)
         if not all_rows:
             df["running_style_score"] = 0.0
             return df
         detail_df = pd.DataFrame(all_rows)
         race_ids = detail_df["race_id"].unique().tolist()
-        rank_rows = []
-        for i in range(0, len(race_ids), 500):
-            res = client.table("race_entries").select("race_id, horse_id, race_date, final_rank")\
-                .in_("race_id", race_ids[i:i + 500]).execute()
-            rank_rows.extend(res.data or [])
+        rank_rows = _fetch_in_batches(client, "race_entries",
+                                       "race_id, horse_id, race_date, final_rank", "race_id", race_ids)
         rank_df = pd.DataFrame(rank_rows)
         merged = detail_df.merge(rank_df, on=["race_id", "horse_id"], how="inner")
 
@@ -836,21 +844,14 @@ class RaceFeatureBuilder:
         horse_ids = df["horse_id"].dropna().unique().tolist() if "horse_id" in df.columns else []
         race_ids = df["race_id"].dropna().unique().tolist() if "race_id" in df.columns else []
 
-        sec_rows = []
-        for i in range(0, len(horse_ids), 500):
-            res = client.table("horse_section_records").select("*")\
-                .in_("horse_id", horse_ids[i:i + 500]).execute()
-            sec_rows.extend(res.data or [])
-
-        detail_rows = []
-        for i in range(0, len(race_ids), 500):
-            res = client.table("race_entry_detail").select(
-                "race_id, horse_id, horse_career_wins, horse_career_starts, "
-                "jockey_career_wins, jockey_career_starts, "
-                "jockey_recent1y_wins, jockey_recent1y_starts, trainer_career_wins, trainer_career_starts, "
-                "trainer_recent1y_wins, trainer_recent1y_starts"
-            ).in_("race_id", race_ids[i:i + 500]).execute()
-            detail_rows.extend(res.data or [])
+        sec_rows = _fetch_in_batches(client, "horse_section_records", "*", "horse_id", horse_ids)
+        detail_rows = _fetch_in_batches(
+            client, "race_entry_detail",
+            "race_id, horse_id, horse_career_wins, horse_career_starts, "
+            "jockey_career_wins, jockey_career_starts, "
+            "jockey_recent1y_wins, jockey_recent1y_starts, trainer_career_wins, trainer_career_starts, "
+            "trainer_recent1y_wins, trainer_recent1y_starts",
+            "race_id", race_ids)
 
         df = self._join_section_records(df, sec_rows)
         df = self._join_career_stats(df, detail_rows)
