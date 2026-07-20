@@ -23,39 +23,59 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "update-results"],
+            "args": ["--mode", "update-results","--date", "2026-07-04"], //  ,"--date", "2026-07-11"
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            // 여러 날짜를 한 번에 놓쳤을 때 → --start-date ~ --end-date 기간 전체를 순회하며 업데이트
+            // ★ 아래 두 날짜를 놓친 기간으로 변경 (YYYY-MM-DD 형식)
+            "name": "② 결과 업데이트 (기간)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": ["--mode", "update-results", "--start-date", "2026-07-10", "--end-date", "2026-07-12"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },
 
         // ════════════════════════════════════════════════════════
-        //  경마장별 개별 예측
+        //  특정 날짜 예측
         // ════════════════════════════════════════════════════════
 
         {
-            "name": "예측 - 서울",
+            "name": "예측 - 특정날짜",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "predict", "--meet", "1"],
+            "args": ["--mode", "predict", "--date", "2026-07-05"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+
+        // ════════════════════════════════════════════════════════
+        //  백테스트 (정확도 측정 — 모델/DB는 건드리지 않고 채점만 함)
+        // ════════════════════════════════════════════════════════
+
+        {
+            // 연승(top3) 백테스트 - 두수 필터 × 확신도(top3_probability) 임계값 조합별 적중률
+            // 결과는 콘솔 출력 + BackTestReport/Result_top3_날짜_시간.md로 자동 저장됨
+            "name": "백테스트 - 연승(top3)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/backtest_top3.py",
+            "args": ["--start", "2026-05-01", "--end", "2026-06-25"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },
         {
-            "name": "예측 - 제주",
+            // 단승(win) 백테스트 - Precision@1, 인기마(최저배당) 기준선 비교, 임계값별 적중률
+            // 결과는 콘솔 출력 + BackTestReport/Result_win_날짜_시간.md로 자동 저장됨
+            "name": "백테스트 - 단승(win)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "predict", "--meet", "2"],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "name": "예측 - 부산",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "predict", "--meet", "3"],
+            "program": "${workspaceFolder}/scripts/backtest_win.py",
+            "args": ["--start", "2026-05-01", "--end", "2026-06-25"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },
@@ -75,7 +95,7 @@
             "type": "debugpy",
             "request": "launch",
             "module": "library.collector_races",
-            "args": ["20260601", "20260607"],   // ← 시작일, 종료일 (YYYYMMDD)
+            "args": ["20260701", "20260801"],   // ← 시작일, 종료일 (YYYYMMDD)
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },
@@ -87,16 +107,6 @@
             "request": "launch",
             "program": "${workspaceFolder}/core/history_rebuilder.py",
             "args": ["2026-06-01", "2026-06-07"],   // ← 시작일, 종료일 (YYYY-MM-DD)
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            // [선택] 하이퍼파라미터 튜닝 후 재학습 — 처음 또는 데이터 크게 늘었을 때
-            "name": "[백필 3-선택] 하이퍼파라미터 튜닝",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "tune", "--start-date", "2024-01-01"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         },
@@ -115,65 +125,19 @@
         },
 
         // ════════════════════════════════════════════════════════
-        //  주간 루틴 (일주일에 1~2회)
+        //  하이퍼파라미터 튜닝 (선택 — 실행 주기: 월 1회 이하)
+        //  데이터가 크게 늘었을 때(예: 한 달치 이상 누적) 또는 최초 1회만 실행하면 충분.
+        //  튜닝만으로는 모델이 바뀌지 않으므로, 실행 후 반드시 [백필 3] 모델 재학습을 다시 돌릴 것.
         // ════════════════════════════════════════════════════════
 
         {
-            // 하이퍼파라미터 탐색 (60 trials × 2모델, 약 20~40분 소요) → best_params.json 저장
-            // 이후 '모델 재학습' 실행하면 자동으로 최적 파라미터 적용됨
-            "name": "하이퍼파라미터 튜닝 (1회성)",
+            // 60 trials × 2모델(XGBoost·LightGBM), 약 20~40분 소요 → models/best_params.json 저장
+            // 이후 모델 재학습을 실행하면 저장된 파라미터가 자동 적용됨
+            "name": "[선택·월1회] 하이퍼파라미터 튜닝",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": ["--mode", "tune", "--start-date", "2024-01-01"],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            // 최신 데이터로 모델 재학습 (--end-date 생략 시 오늘까지, 약 5~10분 소요)
-            "name": "모델 재학습",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": [
-                "--mode", "train",
-                "--start-date", "2024-01-01"
-            ],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            // 오늘까지 경주 데이터 API 수집 (race_entries, 마필/기수/조교사 정보)
-            "name": "데이터 수집 (오늘)",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "library.collector_races",
-            "args": [],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            // horse_race_history 전체 재구성 (오래 걸림, 월 1회 권장)
-            "name": "히스토리 전체 재구성",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/core/history_rebuilder.py",
-            "args": [],
-            "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
-        },
-
-        // ════════════════════════════════════════════════════════
-        //  진단 / 점검
-        // ════════════════════════════════════════════════════════
-
-        {
-            // DB 연결 · 모델 상태 · 재학습 필요 여부 한눈에 확인
-            "name": "Status 확인",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/main.py",
-            "args": ["--mode", "status"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         }
