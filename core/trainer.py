@@ -5,8 +5,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, accuracy_score, ndcg_score
-from xgboost import XGBRanker
-from lightgbm import LGBMRanker
+from xgboost import XGBRanker, XGBClassifier
+from lightgbm import LGBMRanker, LGBMClassifier
 from config import FEATURE_COLUMNS, MODEL_CONFIG, MODEL_DIR
 from Utils.logger import get_logger
 
@@ -72,7 +72,10 @@ class RaceModelTrainer:
         return {"models": self.models, "metrics": all_metrics}
 
     def tune(self, df: pd.DataFrame, n_trials: int = 60) -> dict:
-        """Optuna로 XGBoost·LightGBM 하이퍼파라미터 탐색 후 best_params.json 저장."""
+        """Optuna로 XGBRanker·LGBMRanker 하이퍼파라미터 탐색 후 best_params.json 저장.
+
+        train()과 동일한 랭커 모델·평가 지표(NDCG@3)를 사용해 튜닝 결과가 실제 학습에 유효하도록 한다.
+        """
         try:
             import optuna
             optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -80,17 +83,50 @@ class RaceModelTrainer:
             logger.error("optuna 미설치. pip install optuna 실행 후 다시 시도하세요.")
             return {}
 
+        if "race_id" not in df.columns or "final_rank" not in df.columns:
+            logger.error("tune() 실패: race_id 또는 final_rank 컬럼 없음")
+            return {}
+
         feature_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
         df_sorted = df.sort_values("race_date")
-        split_idx = int(len(df_sorted) * (1 - MODEL_CONFIG["test_size"]))
 
-        X_train = df_sorted.iloc[:split_idx][feature_cols].fillna(0)
-        X_test  = df_sorted.iloc[split_idx:][feature_cols].fillna(0)
-        y_train = df_sorted.iloc[:split_idx]["is_winner"]
-        y_test  = df_sorted.iloc[split_idx:]["is_winner"]
-        pos_weight = len(y_train[y_train == 0]) / max(len(y_train[y_train == 1]), 1)
+        # race-level 시계열 분할 (train()과 동일한 방식)
+        race_dates = df_sorted.groupby("race_id")["race_date"].first().sort_values()
+        split_idx_r = int(len(race_dates) * (1 - MODEL_CONFIG["test_size"]))
+        train_races = set(race_dates.index[:split_idx_r])
+        test_races  = set(race_dates.index[split_idx_r:])
+        df_tr = df_sorted[df_sorted["race_id"].isin(train_races)].sort_values("race_id")
+        df_te = df_sorted[df_sorted["race_id"].isin(test_races)].sort_values("race_id")
 
-        logger.info(f"XGBoost 튜닝 시작 ({n_trials} trials)...")
+        if df_tr.empty or df_te.empty:
+            logger.error("tune() 실패: train/test 분할 후 데이터 부족")
+            return {}
+
+        def make_label(rank: int) -> int:
+            if rank == 1: return 4
+            if rank == 2: return 3
+            if rank == 3: return 2
+            return 1
+
+        X_tr = df_tr[feature_cols].fillna(0)
+        X_te = df_te[feature_cols].fillna(0)
+        y_tr = df_tr["final_rank"].apply(make_label)
+        tr_groups = df_tr.groupby("race_id", sort=False).size().values
+        qid_tr = np.repeat(np.arange(len(tr_groups)), tr_groups)
+
+        def _ndcg_for_tune(scores: np.ndarray) -> float:
+            df_eval = df_te.copy()
+            df_eval["_score"] = scores
+            vals = []
+            for _, grp in df_eval.groupby("race_id"):
+                if len(grp) < 2:
+                    continue
+                true_labels = grp["final_rank"].apply(make_label).values.reshape(1, -1)
+                pred_scores = grp["_score"].values.reshape(1, -1)
+                vals.append(ndcg_score(true_labels, pred_scores, k=min(3, len(grp))))
+            return float(np.mean(vals)) if vals else 0.0
+
+        logger.info(f"XGBoost 튜닝 시작 ({n_trials} trials, 평가=NDCG@3)...")
 
         def xgb_objective(trial):
             params = {
@@ -102,22 +138,23 @@ class RaceModelTrainer:
                 "min_child_weight":  trial.suggest_int("min_child_weight", 1, 10),
                 "gamma":             trial.suggest_float("gamma", 0.0, 1.0),
             }
-            m = XGBClassifier(
-                **params, scale_pos_weight=pos_weight,
+            m = XGBRanker(
+                objective="rank:pairwise",
+                **params,
                 random_state=MODEL_CONFIG["random_state"],
-                eval_metric="logloss", verbosity=0,
+                verbosity=0,
             )
-            m.fit(X_train, y_train)
-            return roc_auc_score(y_test, m.predict_proba(X_test)[:, 1])
+            m.fit(X_tr, y_tr, qid=qid_tr)
+            return _ndcg_for_tune(m.predict(X_te))
 
         study_xgb = optuna.create_study(
             direction="maximize",
             sampler=optuna.samplers.TPESampler(seed=42),
         )
         study_xgb.optimize(xgb_objective, n_trials=n_trials, show_progress_bar=True)
-        logger.info(f"XGBoost 최적 AUC={study_xgb.best_value:.4f}")
+        logger.info(f"XGBoost 최적 NDCG@3={study_xgb.best_value:.4f}")
 
-        logger.info(f"LightGBM 튜닝 시작 ({n_trials} trials)...")
+        logger.info(f"LightGBM 튜닝 시작 ({n_trials} trials, 평가=NDCG@3)...")
 
         def lgb_objective(trial):
             params = {
@@ -131,19 +168,20 @@ class RaceModelTrainer:
                 "reg_alpha":          trial.suggest_float("reg_alpha", 0.0, 1.0),
                 "reg_lambda":         trial.suggest_float("reg_lambda", 0.0, 1.0),
             }
-            m = LGBMClassifier(
-                **params, class_weight="balanced",
+            m = LGBMRanker(
+                objective="lambdarank",
+                **params,
                 random_state=MODEL_CONFIG["random_state"], verbose=-1,
             )
-            m.fit(X_train, y_train)
-            return roc_auc_score(y_test, m.predict_proba(X_test)[:, 1])
+            m.fit(X_tr, y_tr, group=tr_groups)
+            return _ndcg_for_tune(m.predict(X_te))
 
         study_lgb = optuna.create_study(
             direction="maximize",
             sampler=optuna.samplers.TPESampler(seed=42),
         )
         study_lgb.optimize(lgb_objective, n_trials=n_trials, show_progress_bar=True)
-        logger.info(f"LightGBM 최적 AUC={study_lgb.best_value:.4f}")
+        logger.info(f"LightGBM 최적 NDCG@3={study_lgb.best_value:.4f}")
 
         best_params = {
             "XGBoost":  study_xgb.best_params,
@@ -237,6 +275,45 @@ class RaceModelTrainer:
                 X_train_s, X_test_s,
             ),
         }
+
+        if target == "top3":
+            # XGBoost/LightGBM은 ranker용("XGBoost"/"LightGBM" 키)으로도 쓰이므로
+            # _ensemble_proba의 _RANKER_KEYS 필터와 충돌하지 않도록 별도 키 사용.
+            xgb_p = best_params.get("XGBoost", {})
+            lgb_p = best_params.get("LightGBM", {})
+            pos_weight = len(y_train[y_train == 0]) / max(len(y_train[y_train == 1]), 1)
+            model_defs["XGBoostClf"] = (
+                XGBClassifier(
+                    n_estimators=     xgb_p.get("n_estimators", 200),
+                    max_depth=        xgb_p.get("max_depth", 6),
+                    learning_rate=    xgb_p.get("learning_rate", 0.1),
+                    subsample=        xgb_p.get("subsample", 1.0),
+                    colsample_bytree= xgb_p.get("colsample_bytree", 1.0),
+                    min_child_weight= xgb_p.get("min_child_weight", 1),
+                    gamma=            xgb_p.get("gamma", 0.0),
+                    scale_pos_weight=pos_weight,
+                    random_state=MODEL_CONFIG["random_state"],
+                    eval_metric="logloss",
+                    verbosity=0,
+                ),
+                X_train, X_test,
+            )
+            model_defs["LightGBMClf"] = (
+                LGBMClassifier(
+                    n_estimators=      lgb_p.get("n_estimators", 300),
+                    max_depth=         lgb_p.get("max_depth", 6),
+                    learning_rate=     lgb_p.get("learning_rate", 0.1),
+                    subsample=         lgb_p.get("subsample", 1.0),
+                    colsample_bytree=  lgb_p.get("colsample_bytree", 1.0),
+                    num_leaves=        lgb_p.get("num_leaves", 31),
+                    min_child_samples= lgb_p.get("min_child_samples", 20),
+                    reg_alpha=         lgb_p.get("reg_alpha", 0.0),
+                    reg_lambda=        lgb_p.get("reg_lambda", 0.0),
+                    class_weight="balanced",
+                    random_state=MODEL_CONFIG["random_state"], verbose=-1,
+                ),
+                X_train, X_test,
+            )
 
         results, metrics = {}, {}
         for name, (model, Xtr, Xte) in model_defs.items():
