@@ -213,6 +213,72 @@ def test_preprocessor_rolling_missing_columns(sample_df):
     assert (result["jockey_recent_win_rate"] == 0.0).all()
 
 
+def test_preprocessor_horse_speed_at_distance_leak_safe():
+    """같은 거리(1200m)에서의 과거 평균 속도만 반영, 자기 자신 경주는 제외(leak-free)."""
+    df = pd.DataFrame({
+        "horse_id": ["H1", "H1", "H1", "H1"],
+        "race_id": ["R1", "R2", "R3", "R4"],
+        "race_date": ["2025-01-01", "2025-01-10", "2025-01-15", "2025-01-20"],
+        "final_rank": [1, 1, 1, 1],
+        "horse_age": [4, 4, 4, 4],
+        "gender": ["수컷"] * 4,
+        "horse_class": ["국5"] * 4,
+        "race_distance": [1200, 1200, 1400, 1200],
+        "total_horses": [8, 8, 8, 8],
+        "horse_weight": [480, 480, 480, 480],
+        "race_grade": ["일반"] * 4,
+        "track_condition": ["양호"] * 4,
+        "weather": ["맑음"] * 4,
+        "win_odds": [5.0, 5.0, 5.0, 5.0],
+        "finish_time": [80.0, 75.0, 95.0, 70.0],
+    })
+    p = RacePreprocessor()
+    result = p.fit_transform(df)
+    assert "horse_speed_at_distance" in result.columns
+
+    r1 = result[result["race_id"] == "R1"].iloc[0]
+    r2 = result[result["race_id"] == "R2"].iloc[0]
+    r3 = result[result["race_id"] == "R3"].iloc[0]
+    r4 = result[result["race_id"] == "R4"].iloc[0]
+
+    assert r1["horse_speed_at_distance"] == pytest.approx(0.0)          # 1200m 첫 출전
+    assert r2["horse_speed_at_distance"] == pytest.approx(1200 / 80.0)  # R1만 반영
+    assert r3["horse_speed_at_distance"] == pytest.approx(0.0)          # 1400m 첫 출전(별도 그룹)
+    assert r4["horse_speed_at_distance"] == pytest.approx((1200 / 80.0 + 1200 / 75.0) / 2)  # R1,R2 평균
+
+
+def test_preprocessor_horse_speed_at_distance_missing_finish_time():
+    """finish_time 컬럼이 없으면 0.0으로 채워짐."""
+    df = pd.DataFrame({
+        "horse_id": ["H1"],
+        "race_id": ["R1"],
+        "race_date": ["2025-01-01"],
+        "final_rank": [1],
+        "horse_age": [4],
+        "gender": ["수컷"],
+        "horse_class": ["국5"],
+        "race_distance": [1200],
+        "total_horses": [8],
+        "horse_weight": [480],
+        "race_grade": ["일반"],
+        "track_condition": ["양호"],
+        "weather": ["맑음"],
+        "win_odds": [5.0],
+    })
+    p = RacePreprocessor()
+    result = p.fit_transform(df)
+    assert result["horse_speed_at_distance"].iloc[0] == pytest.approx(0.0)
+
+
+def test_preprocessor_transform_horse_speed_at_distance_fallback(sample_df):
+    """transform()에서 horse_speed_at_distance 컬럼이 없으면 0.0으로 채워짐(예측 시 방어값)."""
+    p = RacePreprocessor()
+    p.fit_transform(sample_df)
+    result = p.transform(sample_df.copy())
+    assert "horse_speed_at_distance" in result.columns
+    assert (result["horse_speed_at_distance"] == 0.0).all()
+
+
 def test_preprocessor_race_relative_no_race_id():
     """race_id 없는 df에서 상대 특성은 기본값(0 or 1)으로 채워짐."""
     df = pd.DataFrame({
