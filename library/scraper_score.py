@@ -131,6 +131,80 @@ def update_results_to_db(meet_code: int, race_date: str) -> int:
     return updated
 
 
+def update_final_ranks(race_date: str, meet_code: int) -> int:
+    """
+    경마장별 공공데이터 API(SeoulRace_1 / raceResult_2 / raceResult_3)에서
+    결과를 재조회해 final_rank / win_odds 업데이트.
+    제주·부산경남 API는 월(rc_month) 단위로만 조회되므로, 응답에서 요청한 날짜와
+    정확히 일치하는 기록만 걸러서 반영한다.
+    반환: 업데이트된 race_entries 건수
+    """
+    from library.collector_races import fetch_race_data_all, parse_and_normalize_race_data
+    from Utils.database import get_client
+
+    meet_name = MEET_NAME_MAP.get(meet_code, str(meet_code))
+    date_str = race_date.replace("-", "")
+    try:
+        api_data, _ = fetch_race_data_all(
+            page=1, per_page=1000, meet_code=meet_code,
+            start_date=date_str, end_date=date_str,
+        )
+    except Exception as e:
+        logger.error(f"{meet_name} API 요청 실패 ({race_date}): {e}")
+        return 0
+
+    if not api_data:
+        logger.warning(f"{meet_name} API 응답 없음 ({race_date})")
+        return 0
+
+    parsed = parse_and_normalize_race_data(api_data)
+    entries = [
+        e for e in parsed.get("race_entries", [])
+        if e.get("final_rank") and e.get("race_date") == race_date
+    ]
+
+    if not entries:
+        logger.warning(f"{meet_name} final_rank 데이터 없음 ({race_date}) - 경마일이 아니거나 아직 결과 미공개")
+        return 0
+
+    client = get_client()
+    updated = 0
+    for entry in entries:
+        update_data: dict = {"final_rank": entry["final_rank"]}
+        if entry.get("win_odds"):
+            update_data["win_odds"] = entry["win_odds"]
+        try:
+            res = (
+                client.table("race_entries")
+                .update(update_data)
+                .eq("race_id", entry["race_id"])
+                .eq("horse_id", entry["horse_id"])
+                .execute()
+            )
+            if res.data:
+                updated += 1
+        except Exception as e:
+            logger.error(f"{meet_name} final_rank 업데이트 실패 ({entry.get('race_id')}, {entry.get('horse_id')}): {e}")
+
+    logger.info(f"{meet_name} final_rank 업데이트: {race_date} → {updated}건")
+    return updated
+
+
+def update_final_ranks_seoul(race_date: str) -> int:
+    """서울 전용 래퍼 (하위 호환용)."""
+    return update_final_ranks(race_date, meet_code=1)
+
+
+def update_all_final_ranks(race_date: str) -> dict:
+    """전체 경마장(서울·제주·부산경남) final_rank 일괄 업데이트.
+    반환: {"서울": int, "제주": int, "부산경남": int}
+    """
+    counts = {}
+    for meet_code, name in MEET_NAME_MAP.items():
+        counts[name] = update_final_ranks(race_date, meet_code)
+    return counts
+
+
 def update_all_meets(race_date: str) -> dict:
     """
     전체 경마장(서울·제주·부산) 결과 일괄 업데이트.

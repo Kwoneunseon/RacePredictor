@@ -283,10 +283,18 @@ def parse_and_normalize_race_data(api_response):
         'owners': []
     }
     def parse_horse_weight_simple(wg_hr_str):
-        if not wg_hr_str or wg_hr_str == "()":
-            return 469, 0 #평균 마체중
+        if wg_hr_str is None or wg_hr_str == "" or wg_hr_str == "()":
+            return 469, 0  # 평균 마체중
 
-        # 괄호 분리
+        wg_hr_str = str(wg_hr_str)
+
+        # 괄호 없으면 순수 숫자 (서울 API가 int로 반환하는 경우)
+        if '(' not in wg_hr_str:
+            try:
+                return int(wg_hr_str), 0
+            except ValueError:
+                return 469, 0
+
         parts = wg_hr_str.split('(')
         weight = int(parts[0]) if parts[0] else None
 
@@ -391,7 +399,10 @@ def parse_and_normalize_race_data(api_response):
                         'horse_weight': horse_weight,     #마체중
                         'jk_no': jk_no,
                         'trainer_id': trainer_id,
-                        'final_rank': safe_int(item.get('rcOrd')) if item.get('rcOrd') else safe_int(item.get('ord')),      #순위
+                        # rcOrd(제주·부산) → ord → chaksun(서울 착순) 순으로 fallback
+                        'final_rank': (safe_int(item.get('rcOrd')) or
+                                       safe_int(item.get('ord')) or
+                                       safe_int(item.get('chaksun'))),
                         'win_odds': safe_float(item.get('winOdds')),  #단승배당률
                         'finish_time': safe_float(item.get('rcTime')),  #완주기록(초)
                     })
@@ -680,13 +691,22 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
 if __name__ == "__main__":
     import sys
     from datetime import datetime
+
+    def _parse_date_arg(s: str) -> str:
+        try:
+            datetime.strptime(s, "%Y%m%d")
+        except ValueError:
+            print(f"[오류] 날짜 형식이 잘못됐습니다: '{s}' → YYYYMMDD 형식으로 입력하세요. (예: 20260613)")
+            sys.exit(1)
+        return s
+
     today = datetime.now().strftime('%Y%m%d')
     # 사용법: python -m library.collector_races [시작일 종료일]
     # 예)    python -m library.collector_races 20240101 20241231
     if len(sys.argv) == 3:
-        start, end = sys.argv[1], sys.argv[2]
+        start, end = _parse_date_arg(sys.argv[1]), _parse_date_arg(sys.argv[2])
     elif len(sys.argv) == 2:
-        start = end = sys.argv[1]
+        start = end = _parse_date_arg(sys.argv[1])
     else:
         start = end = today
     logger.info(f"수집 기간: {start} ~ {end}")
