@@ -47,9 +47,14 @@ def test_predictor_probabilities_in_range(mock_trainer_and_preprocessor):
     assert (result["win_probability"] <= 1).all()
 
 
-def test_predictor_top3_probability_uses_ranker_when_available():
-    """top3_probability는 clf_proba와 ranker score를 모두 반영해야 한다.
-    clf는 말B > 말A, ranker는 말A > 말B 로 불일치시켜 ranker 반영 여부 검증.
+def test_predictor_top3_probability_ignores_ranker():
+    """top3_probability는 분류기 확률을 그대로 사용하고 ranker 점수를 반영하지 않아야 한다.
+
+    이유: softmax 정규화는 경주 내 확률 합=1을 강제하는데, 연승은 3마리가 top3에
+    들어오는 조건이라 이 정규화가 부적합하다 (검증: 408경주 백테스트에서 블렌딩 시
+    TOP3_PROB_THRESHOLD=0.65를 넘는 경주가 0건으로 감소, 원시 분류기 확률 대비
+    정확도 차이는 없음(-0.2pp)). ranker 점수는 predict_rank_score_top3로 별도
+    노출되며 순위 개선 용도로만 쓰인다.
     """
     import numpy as np, pandas as pd
     from core.predictor import RacePredictor
@@ -59,7 +64,7 @@ def test_predictor_top3_probability_uses_ranker_when_available():
     trainer.feature_columns = ["horse_age", "horse_win_rate"]
     trainer.predict_rank_score.return_value = None
     trainer.predict_proba.return_value = np.array([0.3, 0.4, 0.3])
-    # clf: 말B(0.7) > 말A(0.1), ranker: 말A(0.99) >> 말B(0.01)
+    # clf: 말B(0.7) > 말A(0.1), ranker: 말A(0.99) >> 말B(0.01) (불일치 상황)
     trainer.predict_proba_top3.return_value = np.array([0.1, 0.7, 0.2])
     trainer.predict_rank_score_top3.return_value = np.array([0.99, 0.01, 0.0])
 
@@ -73,20 +78,14 @@ def test_predictor_top3_probability_uses_ranker_when_available():
     })
 
     p = RacePredictor(trainer, preprocessor)
+    result = p.predict(df)
+    top3 = result.set_index("horse_name")["top3_probability"]
 
-    # ranker 없을 때: clf만 쓰면 말B가 높아야 함
-    trainer.predict_rank_score_top3.return_value = None
-    result_no_ranker = p.predict(df)
-    top3_no_ranker = result_no_ranker.set_index("horse_name")["top3_probability"]
-    assert top3_no_ranker["말B"] > top3_no_ranker["말A"], "clf만 쓸 때 말B가 더 높아야 함"
-
-    # ranker 있을 때: 블렌딩 후 말A가 높아야 함 (ranker가 말A를 압도적으로 선호)
-    trainer.predict_rank_score_top3.return_value = np.array([0.99, 0.01, 0.0])
-    result_with_ranker = p.predict(df)
-    top3_with_ranker = result_with_ranker.set_index("horse_name")["top3_probability"]
-    assert "top3_probability" in result_with_ranker.columns
-    assert top3_with_ranker["말A"] > top3_with_ranker["말B"], \
-        f"ranker 반영 후 말A({top3_with_ranker['말A']:.3f}) > 말B({top3_with_ranker['말B']:.3f}) 여야 함"
+    # ranker가 말A를 압도적으로 선호해도 top3_probability는 clf 그대로(말B가 높음)여야 함
+    assert top3["말B"] > top3["말A"], "top3_probability는 ranker와 무관하게 clf 확률을 그대로 써야 함"
+    assert top3["말A"] == pytest.approx(0.1)
+    assert top3["말B"] == pytest.approx(0.7)
+    assert top3["말C"] == pytest.approx(0.2)
 
 
 def test_predictor_predict_merges_history_columns(mock_trainer_and_preprocessor):

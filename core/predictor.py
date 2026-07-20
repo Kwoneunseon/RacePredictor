@@ -74,16 +74,10 @@ class RacePredictor:
             result["win_probability"] = clf_probs
 
         # ── 연승(top3_probability) ────────────────────────────────────
-        if rank_scores_top3 is not None and clf_probs_top3 is not None and "race_id" in result.columns:
-            result["_top3_lr"]  = rank_scores_top3
-            result["_top3_clf"] = clf_probs_top3
-            top3_probs = pd.Series(np.zeros(len(result)), index=result.index)
-            for _, grp in result.groupby("race_id"):
-                s = _blend_group(grp, "_top3_lr", "_top3_clf")
-                top3_probs[s.index] = s
-            result["top3_probability"] = top3_probs
-            result = result.drop(columns=["_top3_lr", "_top3_clf"])
-        elif clf_probs_top3 is not None:
+        # 이진 분류기 raw 확률을 그대로 사용.
+        # 연승은 3마리가 top3에 들어오므로 경주 내 softmax 정규화가 부적합.
+        # rank_scores_top3는 말 간 순서 개선에 활용하되, 확률값에는 미적용.
+        if clf_probs_top3 is not None:
             result["top3_probability"] = clf_probs_top3
         else:
             result["top3_probability"] = result["win_probability"]
@@ -183,9 +177,14 @@ def format_kakao_message(result: dict, race_date: str) -> str:
                 continue
             top = race_preds.sort_values("win_probability", ascending=False).iloc[0]
             horse = top.get("horse_name") or top.get("horse_id", "?")
+            horse_no = top.get("entry_number")
+            try:
+                horse_no = str(int(horse_no))
+            except (TypeError, ValueError):
+                horse_no = "?"
             prob  = top["win_probability"]
 
-            lines.append(f" {flag}{race_no}경주 {dist}m | {horse} {prob:.1%}")
+            lines.append(f" {flag}{race_no}경주 {dist}m | {horse_no}번 {horse} {prob:.1%}")
             total_races += 1
 
         lines.append("")

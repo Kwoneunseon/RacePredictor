@@ -52,6 +52,7 @@ class Investor:
                 decisions.append({
                     "race_id": race_id,
                     "horse_id": horse_id,
+                    "horse_no": top.get("entry_number"),
                     "horse_name": top.get("horse_name", horse_id),
                     "bet_type": bet_type,
                     "amount": amount,
@@ -74,6 +75,7 @@ class Investor:
                 decisions.append({
                     "race_id": race_id,
                     "horse_id": horse_id,
+                    "horse_no": top.get("entry_number"),
                     "horse_name": top.get("horse_name", horse_id),
                     "bet_type": rec.bet_type,
                     "amount": rec.amount,
