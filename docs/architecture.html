@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>경마 자동 투자 봇 — 아키텍처</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #62626a;
+    --card-bg: #f5f5f7;
+    --border: #d8d8dc;
+    --accent: #2563eb;
+    --accent-bg: #eff6ff;
+    --warn-bg: #fff7ed;
+    --warn-border: #fb923c;
+    --code-bg: #f0f0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14151a;
+      --fg: #e6e6e9;
+      --muted: #9a9aa2;
+      --card-bg: #1e2027;
+      --border: #33343d;
+      --accent: #60a5fa;
+      --accent-bg: #1b2536;
+      --warn-bg: #2a1f14;
+      --warn-border: #f59e0b;
+      --code-bg: #1c1d24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.6;
+  }
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 4rem;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  h1 + p.subtitle { color: var(--muted); margin-top: 0; }
+  h2 {
+    font-size: 1.2rem;
+    margin-top: 3rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+  code {
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
+  td code { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>경마 자동 투자 봇 — 아키텍처</h1>
+  <p class="subtitle">
+    코드 파이프라인 구조 스냅샷. 이 문서는 작성 시점의 구조를 담고 있으며,
+    구조 정리 작업(경계 재정립·네이밍 정리)이 끝나면 갱신됩니다.
+  </p>
+
+  <section id="diagram">
+    <h2>1. 파이프라인 개요</h2>
+  </section>
+
+  <section id="stages">
+    <h2>2. 단계별 설명</h2>
+  </section>
+
+  <section id="inventory">
+    <h2>3. 모듈 인벤토리</h2>
+  </section>
+
+  <section id="migrations">
+    <h2>4. DB 마이그레이션 이력</h2>
+  </section>
+
+  <section id="issues">
+    <h2>5. 알려진 구조적 이슈</h2>
+  </section>
+</main>
+</body>
+</html>
