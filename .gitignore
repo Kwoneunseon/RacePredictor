@@ -10,3 +10,5 @@ catboost_info/
 race_results/
 reports/
 BackTestReport/
+.omc/
+.claude/scheduled_tasks.lock
