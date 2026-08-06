@@ -78,6 +78,54 @@
   td code { white-space: nowrap; }
 
   /* ===== 컴포넌트 (섹션별) ===== */
+  .pipeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: stretch;
+    margin: 1rem 0;
+  }
+  .stage {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 0.9rem;
+    flex: 1 1 110px;
+    min-width: 110px;
+  }
+  .stage.entry { border-color: var(--accent); }
+  .stage h3 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+  .stage p { margin: 0; font-size: 0.8rem; color: var(--muted); }
+  .stage code { font-size: 0.75rem; }
+  .arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 1.2rem;
+    flex: 0 0 auto;
+  }
+  .cross-layer {
+    margin-top: 0.75rem;
+    text-align: center;
+    background: var(--accent-bg);
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    padding: 0.6rem;
+    font-size: 0.85rem;
+  }
+  .exception-note {
+    margin-top: 0.75rem;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.85rem;
+  }
+  @media (max-width: 700px) {
+    .pipeline { flex-direction: column; }
+    .arrow { transform: rotate(90deg); }
+  }
 </style>
 </head>
 <body>
@@ -90,6 +138,32 @@
 
   <section id="diagram">
     <h2>1. 파이프라인 개요</h2>
+    <div class="pipeline">
+      <div class="stage"><h3>수집</h3><p><code>library/</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>전처리&middot;피처</h3><p><code>core/preprocessor.py</code><br><code>core/feature_builder.py</code><br><code>core/history_rebuilder.py</code><br><code>core/race_filter.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>학습&middot;캘리브레이션</h3><p><code>core/trainer.py</code><br><code>core/model_manager.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>확률 모델</h3><p><code>core/rank_distribution.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>예측</h3><p><code>core/predictor.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>베팅</h3><p><code>core/ev_calculator.py</code><br><code>core/odds_collector.py</code><br><code>core/investor.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage"><h3>리포트</h3><p><code>core/prediction_report.py</code></p></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage entry"><h3>실행 진입점</h3><p><code>main.py</code><br><code>scheduler.py</code></p></div>
+    </div>
+    <div class="cross-layer">
+      <code>Utils/</code> — 전 레이어 공용 (DB 싱글톤&middot;로거&middot;카카오톡 알림)
+    </div>
+    <div class="exception-note">
+      <strong>예외:</strong> <code>scripts/</code>는 원칙적으로 core/library를 소비만 하는
+      독립 브랜치이지만, <code>scripts/feature_importance_report.py</code>는
+      <code>main.py</code>의 <code>cmd_train()</code>이 직접 import해서 사용합니다
+      (레이어 원칙 위반 — 구조 정리 B단계 후보).
+    </div>
   </section>
 
   <section id="stages">
