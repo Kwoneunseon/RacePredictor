@@ -91,10 +91,9 @@
     border-radius: 8px;
     padding: 0.75rem 0.9rem;
     flex: 1 1 110px;
-    min-width: 110px;
   }
   .stage.entry { border-color: var(--accent); }
-  .stage h3 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+  .stage .stage-title { margin: 0 0 0.35rem; font-size: 0.95rem; font-weight: 600; }
   .stage p { margin: 0; font-size: 0.8rem; color: var(--muted); }
   .stage code { font-size: 0.75rem; }
   .arrow {
@@ -139,21 +138,21 @@
   <section id="diagram">
     <h2>1. 파이프라인 개요</h2>
     <div class="pipeline">
-      <div class="stage"><h3>수집</h3><p><code>library/</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>전처리&middot;피처</h3><p><code>core/preprocessor.py</code><br><code>core/feature_builder.py</code><br><code>core/history_rebuilder.py</code><br><code>core/race_filter.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>학습&middot;캘리브레이션</h3><p><code>core/trainer.py</code><br><code>core/model_manager.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>확률 모델</h3><p><code>core/rank_distribution.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>예측</h3><p><code>core/predictor.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>베팅</h3><p><code>core/ev_calculator.py</code><br><code>core/odds_collector.py</code><br><code>core/investor.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage"><h3>리포트</h3><p><code>core/prediction_report.py</code></p></div>
-      <div class="arrow">&rarr;</div>
-      <div class="stage entry"><h3>실행 진입점</h3><p><code>main.py</code><br><code>scheduler.py</code></p></div>
+      <div class="stage"><p class="stage-title">수집</p><p><code>library/</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">전처리&middot;피처</p><p><code>core/preprocessor.py</code><br><code>core/feature_builder.py</code><br><code>core/history_rebuilder.py</code><br><code>core/race_filter.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">학습&middot;캘리브레이션</p><p><code>core/trainer.py</code><br><code>core/model_manager.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">확률 모델</p><p><code>core/rank_distribution.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">예측</p><p><code>core/predictor.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">베팅</p><p><code>core/ev_calculator.py</code><br><code>core/odds_collector.py</code><br><code>core/investor.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage"><p class="stage-title">리포트</p><p><code>core/prediction_report.py</code></p></div>
+      <div class="arrow" aria-hidden="true">&rarr;</div>
+      <div class="stage entry"><p class="stage-title">실행 진입점</p><p><code>main.py</code><br><code>scheduler.py</code></p></div>
     </div>
     <div class="cross-layer">
       <code>Utils/</code> — 전 레이어 공용 (DB 싱글톤&middot;로거&middot;카카오톡 알림)
