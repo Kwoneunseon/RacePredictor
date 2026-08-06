@@ -464,7 +464,7 @@ Expected: `001_*.sql` ~ `004_*.sql` 형태의 4개 파일명 출력(정확한 �
 `</h2>` 뒤에 추가(파일명은 `migrations/001_init_schema.sql`로 확인됨):
 
 ```html
-    <p style="color:var(--muted); font-size:0.9rem;">
+    <p class="note">
       스키마 상세는 각 SQL 파일 자체가 source of truth입니다. 여기서는
       목록과 배경만 요약합니다.
     </p>
@@ -482,7 +482,7 @@ Expected: `001_*.sql` ~ `004_*.sql` 형태의 4개 파일명 출력(정확한 �
 뒤에 추가:
 
 ```html
-    <p style="color:var(--muted); font-size:0.9rem;">
+    <p class="note">
       아래 항목은 다음 단계(경계 재정립 &middot; 네이밍 정리)의 입력 자료입니다.
     </p>
     <ul>
