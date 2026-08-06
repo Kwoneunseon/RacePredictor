@@ -212,7 +212,7 @@
       <h3>베팅</h3>
       <ul>
         <li><code>core/ev_calculator.py</code> — EV(기대값)/켈리 비율 베팅 계산</li>
-        <li><code>core/odds_collector.py</code> — 실시간 배당 스크래핑(실패 시 DB 중앙값 fallback)</li>
+        <li><code>core/odds_collector.py</code> — 배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback)</li>
         <li><code>core/investor.py</code> — 베팅 판단·기록(<code>betting_records</code> 저장)과 결과 정산</li>
       </ul>
     </div>
@@ -257,7 +257,7 @@
       <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>history_rebuilder.py</code></td><td><code>horse_race_history</code> 테이블 재구성</td></tr>
-      <tr><td><code>odds_collector.py</code></td><td>실시간 배당 스크래핑(실패 시 DB 중앙값 fallback)</td></tr>
+      <tr><td><code>odds_collector.py</code></td><td>배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback)</td></tr>
       <tr><td><code>race_filter.py</code></td><td>베팅 대상 경주 필터링(거리/등급/두수 조건)</td></tr>
       <tr><td><code>preprocessor.py</code></td><td>학습용 피처 전처리(라벨 인코딩 등)</td></tr>
       <tr><td><code>feature_builder.py</code></td><td>DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</td></tr>
@@ -308,9 +308,9 @@
     </p>
     <ul>
       <li><code>001_init_schema.sql</code> — 최초 전체 스키마(horses/races/jockeys/trainers/race_entries 등 기본 테이블)</li>
-      <li><code>002_retroactive_new_signal_tables.sql</code> — 신호 피처 실험용 테이블(실험은 기각되었으나 재검토 가능성을 남기기 위해 스키마 유지)</li>
-      <li><code>003_race_payouts.sql</code> — 경주 확정배당(연승/복승/쌍승/복연승/삼복승/삼쌍승) 저장 테이블</li>
-      <li><code>004_betting_records_bet_type_check.sql</code> — <code>betting_records.bet_type</code> 제약조건 정리</li>
+      <li><code>002_retroactive_new_signal_tables.sql</code> — 신호 피처 실험용 테이블(실험은 기각되었으나 재검토 가능성을 남기기 위해 스키마 유지). 테이블은 이미 운영 Supabase에 직접 생성돼 있어 이 파일 자체는 실질적인 스키마 변경 없이 그 상태를 재현하기 위한 기록용</li>
+      <li><code>003_race_payouts.sql</code> — 경주 확정배당(단승/연승/복승/쌍승/복연승/삼복승/삼쌍승) 저장 테이블 + 관련 인덱스</li>
+      <li><code>004_betting_records_bet_type_check.sql</code> — <code>betting_records.bet_type</code>에 CHECK 제약 추가(win/place 영문 어휘 통일, 이전에는 제약 없이 값 드리프트 위험 존재)</li>
     </ul>
   </section>
 
@@ -320,7 +320,7 @@
       아래 항목은 다음 단계(경계 재정립 &middot; 네이밍 정리)의 입력 자료입니다.
     </p>
     <ul>
-      <li><code>scripts/feature_importance_report.py</code>를 <code>main.py</code>가 직접 import — "scripts는 core/library를 소비만 한다"는 레이어 원칙과 반대 방향</li>
+      <li><code>scripts/feature_importance_report.py</code>를 <code>main.py</code>가 직접 import — &ldquo;scripts는 core/library를 소비만 한다&rdquo;는 레이어 원칙과 반대 방향</li>
       <li><code>Utils/function.py</code> — 이름만으로 내용을 알 수 없는 그랩백(grab-bag) 유틸리티 파일</li>
       <li><code>core/odds_collector.py</code>와 <code>library/scraper_odds.py</code> — 이름이 비슷하지만 레이어와 역할이 다름(전자는 core의 배당 조회 클래스, 후자는 library의 스크래핑 함수) — 새로 온 사람이 혼동하기 쉬움</li>
     </ul>
