@@ -76,6 +76,8 @@
   }
   th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
   td code { white-space: nowrap; }
+  table th:first-child, table td:first-child { width: 38%; }
+  h3 code { background: none; padding: 0; }
 
   /* ===== 컴포넌트 (섹션별) ===== */
   .pipeline {
@@ -181,23 +183,23 @@
     <div class="stage-detail">
       <h3>전처리 &middot; 피처 엔지니어링</h3>
       <ul>
-        <li><code>core/preprocessor.py</code> — 라벨 인코딩 등 학습 전처리</li>
-        <li><code>core/feature_builder.py</code> — DB에서 피처를 모아 DataFrame으로 변환</li>
+        <li><code>core/preprocessor.py</code> — 학습용 피처 전처리(라벨 인코딩 등)</li>
+        <li><code>core/feature_builder.py</code> — DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</li>
         <li><code>core/history_rebuilder.py</code> — <code>horse_race_history</code> 테이블 재구성</li>
-        <li><code>core/race_filter.py</code> — 베팅 대상 경주 필터(거리/등급/두수)</li>
+        <li><code>core/race_filter.py</code> — 베팅 대상 경주 필터링(거리/등급/두수 조건)</li>
       </ul>
     </div>
     <div class="stage-detail">
       <h3>학습 &middot; 캘리브레이션</h3>
       <ul>
         <li><code>core/trainer.py</code> — XGBoost/LightGBM top3 분류기+ranker 학습, isotonic 캘리브레이션</li>
-        <li><code>core/model_manager.py</code> — 학습된 모델 저장/로드</li>
+        <li><code>core/model_manager.py</code> — 학습된 모델 저장/로드 관리</li>
       </ul>
     </div>
     <div class="stage-detail">
       <h3>확률 모델</h3>
       <ul>
-        <li><code>core/rank_distribution.py</code> — Harville(Plackett-Luce) 방식으로 top3/복연승 확률 유도</li>
+        <li><code>core/rank_distribution.py</code> — Harville(Plackett-Luce) 방식 top3/복연승 확률 유도</li>
       </ul>
     </div>
     <div class="stage-detail">
@@ -209,7 +211,7 @@
     <div class="stage-detail">
       <h3>베팅</h3>
       <ul>
-        <li><code>core/ev_calculator.py</code> — EV(기대값)/켈리 비율 계산</li>
+        <li><code>core/ev_calculator.py</code> — EV(기대값)/켈리 비율 베팅 계산</li>
         <li><code>core/odds_collector.py</code> — 실시간 배당 스크래핑(실패 시 DB 중앙값 fallback)</li>
         <li><code>core/investor.py</code> — 베팅 판단·기록(<code>betting_records</code> 저장)과 결과 정산</li>
       </ul>
@@ -218,7 +220,7 @@
       <h3>리포트</h3>
       <ul>
         <li><code>core/prediction_report.py</code> — 예측 결과 HTML 리포트 생성</li>
-        <li><code>scripts/feature_importance_report.py</code> — 변수 중요도 HTML 리포트(학습 시마다 갱신)</li>
+        <li><code>scripts/feature_importance_report.py</code> — 변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</li>
       </ul>
     </div>
     <div class="stage-detail">
@@ -233,9 +235,9 @@
   <section id="inventory">
     <h2>3. 모듈 인벤토리</h2>
 
-    <h3>library/</h3>
+    <h3><code>library/</code></h3>
     <div class="table-scroll">
-    <table>
+      <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>collector_horse.py</code></td><td>말 기본정보 수집(공공데이터포털 API)</td></tr>
       <tr><td><code>collector_jockeys.py</code></td><td>기수 정보 수집</td></tr>
@@ -247,12 +249,12 @@
       <tr><td><code>scraper_score.py</code></td><td>확정 배당(단승/연승/복승/쌍승/복연승/삼복승/삼쌍승) 스크래핑 — ScoreInfo.do</td></tr>
       <tr><td><code>scraper_weights.py</code></td><td>마체중 스크래핑</td></tr>
       <tr><td><code>__init__.py</code></td><td>패키지 공개 함수 재노출</td></tr>
-    </table>
+      </table>
     </div>
 
-    <h3>core/</h3>
+    <h3><code>core/</code></h3>
     <div class="table-scroll">
-    <table>
+      <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>history_rebuilder.py</code></td><td><code>horse_race_history</code> 테이블 재구성</td></tr>
       <tr><td><code>odds_collector.py</code></td><td>실시간 배당 스크래핑(실패 시 DB 중앙값 fallback)</td></tr>
@@ -261,17 +263,17 @@
       <tr><td><code>feature_builder.py</code></td><td>DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</td></tr>
       <tr><td><code>trainer.py</code></td><td>XGBoost/LightGBM top3 분류기+ranker 학습, isotonic 캘리브레이션</td></tr>
       <tr><td><code>model_manager.py</code></td><td>학습된 모델 저장/로드 관리</td></tr>
-      <tr><td><code>rank_distribution.py</code></td><td>Harville 방식 top3/복연승 확률 유도</td></tr>
+      <tr><td><code>rank_distribution.py</code></td><td>Harville(Plackett-Luce) 방식 top3/복연승 확률 유도</td></tr>
       <tr><td><code>ev_calculator.py</code></td><td>EV(기대값)/켈리 비율 베팅 계산</td></tr>
       <tr><td><code>investor.py</code></td><td>베팅 판단&middot;기록(<code>betting_records</code> 저장)과 결과 정산</td></tr>
-      <tr><td><code>predictor.py</code></td><td>오늘자 경주 예측 실행, 카카오톡 메시지 포맷</td></tr>
+      <tr><td><code>predictor.py</code></td><td>오늘자 경주 예측 실행, 카카오톡 메시지 포맷 생성</td></tr>
       <tr><td><code>prediction_report.py</code></td><td>예측 결과 HTML 리포트 생성</td></tr>
-    </table>
+      </table>
     </div>
 
-    <h3>Utils/</h3>
+    <h3><code>Utils/</code></h3>
     <div class="table-scroll">
-    <table>
+      <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>function.py</code></td><td>공용 헬퍼(날짜 파싱, <code>safe_int</code>/<code>safe_float</code> 등)</td></tr>
       <tr><td><code>logger.py</code></td><td>로거 설정</td></tr>
@@ -279,22 +281,22 @@
       <tr><td><code>kakaotalk.py</code></td><td>카카오톡 메시지 전송(토큰 만료 시 자동 갱신)</td></tr>
       <tr><td><code>kakao_auth.py</code></td><td>카카오톡 토큰 최초 발급(1회성 스크립트)</td></tr>
       <tr><td><code>__init__.py</code></td><td>패키지 공개 함수 재노출</td></tr>
-    </table>
+      </table>
     </div>
 
-    <h3>scripts/</h3>
+    <h3><code>scripts/</code></h3>
     <div class="table-scroll">
-    <table>
+      <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>_backtest_common.py</code></td><td>백테스트 공용 로딩/예측 로직</td></tr>
       <tr><td><code>backtest_top3.py</code></td><td>연승(3등 이내) 백테스트</td></tr>
       <tr><td><code>backtest_win.py</code></td><td>단승(1착) 백테스트</td></tr>
-      <tr><td><code>backtest_win_tax_adjusted.py</code></td><td>단승 세후(稅後) ROI 재검증</td></tr>
+      <tr><td><code>backtest_win_tax_adjusted.py</code></td><td>단승 세후 ROI 재검증</td></tr>
       <tr><td><code>backtest_quinella_place_heuristic.py</code></td><td>복연승 휴리스틱 백테스트(정식 Harville 모델 구현 전 임시 대체)</td></tr>
       <tr><td><code>backfill_place_payouts.py</code></td><td>제주&middot;부산경남 연승 확정배당 소급 백필</td></tr>
       <tr><td><code>diagnose_calibration.py</code></td><td>확률 캘리브레이션(isotonic) 진단</td></tr>
-      <tr><td><code>feature_importance_report.py</code></td><td>변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출)</td></tr>
-    </table>
+      <tr><td><code>feature_importance_report.py</code></td><td>변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</td></tr>
+      </table>
     </div>
   </section>
 
