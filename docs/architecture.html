@@ -125,6 +125,10 @@
     .pipeline { flex-direction: column; }
     .arrow { transform: rotate(90deg); }
   }
+  .stage-block { margin: 1.25rem 0; }
+  .stage-block h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+  .stage-block ul { margin: 0.3rem 0 0; padding-left: 1.25rem; }
+  .stage-block li { margin: 0.15rem 0; font-size: 0.92rem; }
 </style>
 </head>
 <body>
@@ -167,6 +171,63 @@
 
   <section id="stages">
     <h2>2. 단계별 설명</h2>
+    <div class="stage-block">
+      <h3>데이터 수집</h3>
+      <ul>
+        <li><code>library/collector_*.py</code> — 말/기수/조교사/경주/경주결과/구간기록, 공공데이터포털 API</li>
+        <li><code>library/scraper_*.py</code> — 배당/마체중, KRA 웹 스크래핑</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>전처리 &middot; 피처 엔지니어링</h3>
+      <ul>
+        <li><code>core/preprocessor.py</code> — 라벨 인코딩 등 학습 전처리</li>
+        <li><code>core/feature_builder.py</code> — DB에서 피처를 모아 DataFrame으로 변환</li>
+        <li><code>core/history_rebuilder.py</code> — <code>horse_race_history</code> 테이블 재구성</li>
+        <li><code>core/race_filter.py</code> — 베팅 대상 경주 필터(거리/등급/두수)</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>학습 &middot; 캘리브레이션</h3>
+      <ul>
+        <li><code>core/trainer.py</code> — XGBoost/LightGBM top3 분류기+ranker 학습, isotonic 캘리브레이션</li>
+        <li><code>core/model_manager.py</code> — 학습된 모델 저장/로드</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>확률 모델</h3>
+      <ul>
+        <li><code>core/rank_distribution.py</code> — Harville(Plackett-Luce) 방식으로 top3/복연승 확률 유도</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>예측</h3>
+      <ul>
+        <li><code>core/predictor.py</code> — 오늘자 경주 예측 실행, 카카오톡 메시지 포맷 생성</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>베팅</h3>
+      <ul>
+        <li><code>core/ev_calculator.py</code> — EV(기대값)/켈리 비율 계산</li>
+        <li><code>core/odds_collector.py</code> — 실시간 배당 조회</li>
+        <li><code>core/investor.py</code> — 베팅 실행(EV 계산과 배당 조회 연결)</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>리포트</h3>
+      <ul>
+        <li><code>core/prediction_report.py</code> — 예측 결과 HTML 리포트 생성</li>
+        <li><code>scripts/feature_importance_report.py</code> — 변수 중요도 HTML 리포트(학습 시마다 갱신)</li>
+      </ul>
+    </div>
+    <div class="stage-block">
+      <h3>실행 진입점</h3>
+      <ul>
+        <li><code>main.py</code> — <code>--mode {train,predict,update-results,tune}</code> CLI</li>
+        <li><code>scheduler.py</code> — APScheduler: 시간별/평일 06:00 데이터 수집, 매일 10:00 예측+카카오톡 전송</li>
+      </ul>
+    </div>
   </section>
 
   <section id="inventory">
