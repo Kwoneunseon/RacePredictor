@@ -386,7 +386,7 @@ git commit -m "docs: architecture.html 단계별 설명 섹션 추가"
     <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>history_rebuilder.py</code></td><td><code>horse_race_history</code> 테이블 재구성</td></tr>
-      <tr><td><code>odds_collector.py</code></td><td>실시간 배당 조회(<code>OddsCollector</code> 클래스, 베팅 실행 시 사용)</td></tr>
+      <tr><td><code>odds_collector.py</code></td><td>실시간 배당 스크래핑(실패 시 DB 중앙값 fallback)</td></tr>
       <tr><td><code>race_filter.py</code></td><td>베팅 대상 경주 필터링(거리/등급/두수 조건)</td></tr>
       <tr><td><code>preprocessor.py</code></td><td>학습용 피처 전처리(라벨 인코딩 등)</td></tr>
       <tr><td><code>feature_builder.py</code></td><td>DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</td></tr>
@@ -394,7 +394,7 @@ git commit -m "docs: architecture.html 단계별 설명 섹션 추가"
       <tr><td><code>model_manager.py</code></td><td>학습된 모델 저장/로드 관리</td></tr>
       <tr><td><code>rank_distribution.py</code></td><td>Harville 방식 top3/복연승 확률 유도</td></tr>
       <tr><td><code>ev_calculator.py</code></td><td>EV(기대값)/켈리 비율 베팅 계산</td></tr>
-      <tr><td><code>investor.py</code></td><td>베팅 실행(EV 계산 + 실시간 배당 조회 연결)</td></tr>
+      <tr><td><code>investor.py</code></td><td>베팅 판단&middot;기록(<code>betting_records</code> 저장)과 결과 정산</td></tr>
       <tr><td><code>predictor.py</code></td><td>오늘자 경주 예측 실행, 카카오톡 메시지 포맷</td></tr>
       <tr><td><code>prediction_report.py</code></td><td>예측 결과 HTML 리포트 생성</td></tr>
     </table>
