@@ -95,6 +95,7 @@
     flex: 1 1 110px;
   }
   .stage.entry { border-color: var(--accent); }
+  .stage.unwired { border-style: dashed; border-color: var(--warn-border); }
   .stage .stage-title { margin: 0 0 0.35rem; font-size: 0.95rem; font-weight: 600; color: var(--fg); }
   .stage p { margin: 0; font-size: 0.8rem; color: var(--muted); }
   .stage code { font-size: 0.75rem; }
@@ -150,7 +151,7 @@
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="stage"><p class="stage-title">학습&middot;캘리브레이션</p><p><code>core/trainer.py</code><br><code>core/model_manager.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
-      <div class="stage"><p class="stage-title">확률 모델</p><p><code>core/rank_distribution.py</code></p></div>
+      <div class="stage unwired"><p class="stage-title">확률 모델(미연결)</p><p><code>core/rank_distribution.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="stage"><p class="stage-title">예측</p><p><code>core/predictor.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
@@ -168,6 +169,11 @@
       독립 브랜치이지만, <code>scripts/feature_importance_report.py</code>는
       <code>main.py</code>의 <code>cmd_train()</code>이 직접 import해서 사용합니다
       (레이어 원칙 위반 — 구조 정리 B단계 후보).
+    </div>
+    <div class="exception-note">
+      <strong>미연결:</strong> 점선 테두리로 표시한 <code>확률 모델</code> 단계는
+      코드는 구현·테스트돼 있지만 실제 예측&middot;베팅 흐름에서 호출되지
+      않습니다. 자세한 내용은 5. 알려진 구조적 이슈 참고.
     </div>
   </section>
 
@@ -199,7 +205,7 @@
     <div class="stage-detail">
       <h3>확률 모델</h3>
       <ul>
-        <li><code>core/rank_distribution.py</code> — Harville(Plackett-Luce) 방식 top3/복연승 확률 유도</li>
+        <li><code>core/rank_distribution.py</code> — Harville(Plackett-Luce) 방식 top3/복연승 확률 유도. 구현&middot;테스트 완료, <strong>아직 예측&middot;베팅 파이프라인에서 호출되지 않음</strong>(5. 알려진 구조적 이슈 참고)</li>
       </ul>
     </div>
     <div class="stage-detail">
@@ -263,9 +269,9 @@
       <tr><td><code>feature_builder.py</code></td><td>DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</td></tr>
       <tr><td><code>trainer.py</code></td><td>XGBoost/LightGBM top3 분류기+ranker 학습, isotonic 캘리브레이션</td></tr>
       <tr><td><code>model_manager.py</code></td><td>학습된 모델 저장/로드 관리</td></tr>
-      <tr><td><code>rank_distribution.py</code></td><td>Harville(Plackett-Luce) 방식 top3/복연승 확률 유도</td></tr>
+      <tr><td><code>rank_distribution.py</code></td><td>Harville(Plackett-Luce) 방식 top3/복연승 확률 유도(구현&middot;테스트 완료, 파이프라인 미연결)</td></tr>
       <tr><td><code>ev_calculator.py</code></td><td>EV(기대값)/켈리 비율 베팅 계산</td></tr>
-      <tr><td><code>investor.py</code></td><td>베팅 판단&middot;기록(<code>betting_records</code> 저장)과 결과 정산</td></tr>
+      <tr><td><code>investor.py</code></td><td>베팅 판단(<code>decide()</code>). <code>save_bets()</code>/<code>update_results()</code>(<code>betting_records</code> 저장&middot;정산)는 구현돼 있으나 파이프라인에서 호출되지 않음</td></tr>
       <tr><td><code>predictor.py</code></td><td>오늘자 경주 예측 실행, 카카오톡 메시지 포맷 생성</td></tr>
       <tr><td><code>prediction_report.py</code></td><td>예측 결과 HTML 리포트 생성</td></tr>
       </table>
@@ -333,6 +339,8 @@
       <li><code>scripts/feature_importance_report.py</code>를 <code>main.py</code>가 직접 import — &ldquo;scripts는 core/library를 소비만 한다&rdquo;는 레이어 원칙과 반대 방향</li>
       <li><code>Utils/function.py</code> — 이름만으로 내용을 알 수 없는 그랩백(grab-bag) 유틸리티 파일</li>
       <li><code>core/odds_collector.py</code>와 <code>library/scraper_odds.py</code> — 이름이 비슷하지만 레이어와 역할이 다름(전자는 core의 배당 조회 클래스, 후자는 library의 스크래핑 함수) — 새로 온 사람이 혼동하기 쉬움</li>
+      <li><code>core/rank_distribution.py</code>(Harville 확률 모델) — 구현&middot;테스트는 완료됐지만 <code>core/predictor.py</code>/<code>core/investor.py</code> 어디에서도 import되지 않아 예측&middot;베팅 파이프라인과 연결돼 있지 않음</li>
+      <li><code>core/investor.py</code>의 <code>save_bets()</code>/<code>update_results()</code> — <code>betting_records</code> 저장&middot;정산 로직이 구현돼 있지만 <code>main.py</code>는 <code>decide()</code>만 호출함(실제 베팅 기록/정산은 아직 파이프라인에 연결 안 됨)</li>
     </ul>
   </section>
 </main>
