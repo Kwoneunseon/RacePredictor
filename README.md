@@ -36,8 +36,9 @@ cp .env.example .env
 ```
 
 `API_KEY`/`SUPABASE_URL`/`SUPABASE_KEY`는 필수입니다. `KAKAO_REST_API_KEY`/
-`KAKAO_ACCESS_TOKEN`은 선택(예측 결과 카카오톡 알림용)이며, 비워두면
-알림 전송만 조용히 건너뜁니다.
+`KAKAO_ACCESS_TOKEN`/`KAKAO_REFRESH_TOKEN`은 선택(예측 결과 카카오톡
+알림용)이며, 비워두면 로그에 경고만 남고 나머지 파이프라인은 정상
+진행됩니다.
 
 카카오톡 알림을 쓰려면 `python -m Utils.kakao_auth`로 토큰을 최초 1회
 발급받으세요(access/refresh 토큰이 `.env`에 저장되고, 이후 만료 시
@@ -62,9 +63,9 @@ python main.py --mode tune
 python scheduler.py
 ```
 
-`--meet`으로 경마장을 지정할 수 있습니다(1=서울, 2=제주, 3=부산경남).
-`--mode predict`에서 생략하면 예측 결과는 전체 경마장을 보여주지만,
-베팅 판단(EV 계산)은 서울(1) 기준으로 계산됩니다.
+`--meet`은 `--mode predict`에서만 유효합니다(1=서울, 2=제주, 3=부산경남).
+생략하면 예측 결과는 전체 경마장을 보여주지만, 베팅 판단(EV 계산)은
+서울(1) 기준으로 계산됩니다.
 
 ## 테스트
 
@@ -80,6 +81,8 @@ pytest
 - `main.py` / `scheduler.py` — CLI 진입점 / 자동 스케줄링
 - `migrations/` — 번호 붙은 SQL 스키마 파일
 - `scripts/` — 백테스트/분석 스크립트
+- `tests/` — pytest 테스트
+- `config.py` — 환경변수 로드 + 베팅/학습 임계값 설정
 
 파이프라인 다이어그램, 모듈 인벤토리 표, migrations 이력, 알려진 구조적
 이슈까지 자세히 보려면 [`docs/architecture.html`](docs/architecture.html)을

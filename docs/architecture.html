@@ -58,6 +58,7 @@
     border-bottom: 1px solid var(--border);
   }
   h3 { font-size: 1rem; margin: 1.5rem 0 0.4rem; }
+  a { color: var(--accent); }
   code {
     background: var(--code-bg);
     padding: 0.1rem 0.35rem;
@@ -310,8 +311,9 @@
       <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>config.py</code></td><td>환경변수(.env) 로드 + 베팅/학습 임계값(<code>KELLY_FRACTION</code>, <code>TOP3_PROB_THRESHOLD</code> 등)과 <code>FEATURE_COLUMNS</code> 정의. 대부분의 <code>core/</code> 모듈이 여기서 직접 import</td></tr>
-      <tr><td><code>main.py</code></td><td>CLI 진입점 — 1. 파이프라인 개요 / 2. 단계별 설명 참고</td></tr>
-      <tr><td><code>scheduler.py</code></td><td>자동 스케줄링 — 1. 파이프라인 개요 / 2. 단계별 설명 참고</td></tr>
+      <tr><td><code>main.py</code></td><td>CLI 진입점 — <a href="#diagram">1. 파이프라인 개요</a> / <a href="#stages">2. 단계별 설명</a> 참고</td></tr>
+      <tr><td><code>scheduler.py</code></td><td>자동 스케줄링 — <a href="#diagram">1. 파이프라인 개요</a> / <a href="#stages">2. 단계별 설명</a> 참고</td></tr>
+      <tr><td><code>tests/</code></td><td>pytest 테스트(디렉토리). <code>core</code>/<code>library</code>/<code>Utils</code> 구조와 대략 1:1 대응</td></tr>
       </table>
     </div>
   </section>

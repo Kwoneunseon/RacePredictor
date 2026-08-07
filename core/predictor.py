@@ -140,7 +140,7 @@ def predict_today(race_date: str) -> dict:
         "predictions":  predictions,
         "race_info":    race_info,
         "eligible_ids": eligible_ids,
-        "meet_name":    {1: "서울", 2: "제주", 3: "부산", 0: "미상"},
+        "meet_name":    {1: "서울", 2: "제주", 3: "부산경남", 0: "미상"},
     }
 
 

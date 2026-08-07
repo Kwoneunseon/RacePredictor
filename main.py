@@ -235,7 +235,7 @@ def cmd_predict(args):
     for mc in sorted(meet_codes):
         all_odds.update(oc.get_odds(args.date, mc))
 
-    MEET_NAME = {1: "서울", 2: "제주", 3: "부산", 0: "미상"}
+    MEET_NAME = {1: "서울", 2: "제주", 3: "부산경남", 0: "미상"}
 
     def race_label(race_id):
         info = race_info.get(race_id, {})
