@@ -7,13 +7,15 @@
 ## 핵심 기능
 
 - 말/기수/조교사/경주결과/배당 데이터 자동 수집
-- top3(연승) 분류기 + ranker 학습, isotonic 확률 캘리브레이션
-- Harville 방식 확률 모델(단승/연승/복연승)
-- EV/켈리 비율 기반 베팅 로직
+- top3(연승) 분류기 + ranker 학습, 단승 확률 isotonic 캘리브레이션(연승은 raw 유지)
+- EV/켈리 비율 기반 베팅 로직(단승/연승)
 - `scheduler.py`를 통한 자동 수집 + 매일 10:00 예측 결과 카카오톡 전송
 
-자세한 코드 구조와 데이터 흐름은 [`docs/architecture.html`](docs/architecture.html)을
-참고하세요.
+`core/rank_distribution.py`에 Harville 방식 확률 모델(단승/연승/복연승)이
+구현·테스트돼 있지만, 아직 베팅 파이프라인에는 연결되지 않았습니다.
+
+자세한 코드 구조와 데이터 흐름은 브라우저로 [`docs/architecture.html`](docs/architecture.html)을
+열어 참고하세요(GitHub에서는 소스로만 보입니다).
 
 ## 요구사항
 
@@ -27,20 +29,19 @@
 pip install -r requirements.txt
 ```
 
-`.env` 파일을 프로젝트 루트에 생성:
+`.env.example`을 복사해 `.env`를 만들고 값을 채우세요:
 
-```
-API_KEY=공공데이터포털_API_키
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-supabase-key
-
-# 선택: 예측 결과 카카오톡 알림
-KAKAO_REST_API_KEY=
-KAKAO_ACCESS_TOKEN=
+```bash
+cp .env.example .env
 ```
 
-카카오톡 알림을 쓰려면 `python Utils/kakao_auth.py`로 토큰을 최초 1회
-발급받으세요(이후 자동 갱신됩니다).
+`API_KEY`/`SUPABASE_URL`/`SUPABASE_KEY`는 필수입니다. `KAKAO_REST_API_KEY`/
+`KAKAO_ACCESS_TOKEN`은 선택(예측 결과 카카오톡 알림용)이며, 비워두면
+알림 전송만 조용히 건너뜁니다.
+
+카카오톡 알림을 쓰려면 `python -m Utils.kakao_auth`로 토큰을 최초 1회
+발급받으세요(access/refresh 토큰이 `.env`에 저장되고, 이후 만료 시
+`kakaotalk.py`가 자동 갱신합니다).
 
 ## 사용법
 
@@ -48,7 +49,7 @@ KAKAO_ACCESS_TOKEN=
 # 모델 학습
 python main.py --mode train --start-date 2024-01-01 --end-date 2024-12-31
 
-# 특정 날짜 경주 예측
+# 특정 날짜 경주 예측(--mode train으로 학습된 모델이 먼저 있어야 함)
 python main.py --mode predict --date 2026-08-05
 
 # 경주 결과 반영(정산)
@@ -61,8 +62,9 @@ python main.py --mode tune
 python scheduler.py
 ```
 
-`--meet`으로 경마장을 지정할 수 있습니다(1=서울, 2=제주, 3=부산경남,
-생략 시 전체).
+`--meet`으로 경마장을 지정할 수 있습니다(1=서울, 2=제주, 3=부산경남).
+`--mode predict`에서 생략하면 예측 결과는 전체 경마장을 보여주지만,
+베팅 판단(EV 계산)은 서울(1) 기준으로 계산됩니다.
 
 ## 테스트
 
@@ -79,8 +81,9 @@ pytest
 - `migrations/` — 번호 붙은 SQL 스키마 파일
 - `scripts/` — 백테스트/분석 스크립트
 
-구조와 데이터 흐름을 그림으로 보려면 [`docs/architecture.html`](docs/architecture.html)을
-여세요.
+파이프라인 다이어그램, 모듈 인벤토리 표, migrations 이력, 알려진 구조적
+이슈까지 자세히 보려면 [`docs/architecture.html`](docs/architecture.html)을
+브라우저로 여세요.
 
 ## 면책조항
 

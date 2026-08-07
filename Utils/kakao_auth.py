@@ -10,7 +10,7 @@ from pathlib import Path
 from config import KAKAO_REST_API_KEY
 
 REDIRECT_URI = "http://localhost:8000"
-ENV_PATH = Path(__file__).parent / ".env"
+ENV_PATH = Path(__file__).parent.parent / ".env"
 
 
 def get_auth_url():

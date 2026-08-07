@@ -444,7 +444,7 @@ def main():
     parser.add_argument("--date",
                         default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--meet", type=int, default=None,
-                        help="1=서울, 2=부산, 3=제주")
+                        help="1=서울, 2=제주, 3=부산경남")
     args = parser.parse_args()
 
     if args.mode == "tune":

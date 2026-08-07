@@ -8,6 +8,7 @@ pandas==2.2.3
 numpy==1.26.4
 joblib==1.4.2
 requests==2.32.3
+beautifulsoup4==4.11.2
 httpx==0.27.2
 python-dateutil==2.9.0
 optuna==4.3.0
