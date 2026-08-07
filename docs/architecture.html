@@ -138,7 +138,7 @@
   <h1>경마 자동 투자 봇 — 아키텍처</h1>
   <p class="subtitle">
     코드 파이프라인 구조 스냅샷. 이 문서는 작성 시점의 구조를 담고 있으며,
-    구조 정리 작업(경계 재정립·네이밍 정리)이 끝나면 갱신됩니다.
+    구조 정리 작업(B단계 경계 재정립 &middot; A단계 네이밍 정리)이 끝나면 갱신됩니다.
   </p>
 
   <section id="diagram">
@@ -298,6 +298,16 @@
       <tr><td><code>feature_importance_report.py</code></td><td>변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</td></tr>
       </table>
     </div>
+
+    <h3>루트</h3>
+    <div class="table-scroll">
+      <table>
+      <tr><th>파일</th><th>책임</th></tr>
+      <tr><td><code>config.py</code></td><td>환경변수(.env) 로드 + 베팅/학습 임계값(<code>KELLY_FRACTION</code>, <code>TOP3_PROB_THRESHOLD</code> 등)과 <code>FEATURE_COLUMNS</code> 정의. 대부분의 <code>core/</code> 모듈이 여기서 직접 import</td></tr>
+      <tr><td><code>main.py</code></td><td>CLI 진입점 — 1. 파이프라인 개요 / 2. 단계별 설명 참고</td></tr>
+      <tr><td><code>scheduler.py</code></td><td>자동 스케줄링 — 1. 파이프라인 개요 / 2. 단계별 설명 참고</td></tr>
+      </table>
+    </div>
   </section>
 
   <section id="migrations">
@@ -317,7 +327,7 @@
   <section id="issues">
     <h2>5. 알려진 구조적 이슈</h2>
     <p class="note">
-      아래 항목은 다음 단계(경계 재정립 &middot; 네이밍 정리)의 입력 자료입니다.
+      아래 항목은 다음 단계(B: 경계 재정립 &middot; A: 네이밍 정리)의 입력 자료입니다.
     </p>
     <ul>
       <li><code>scripts/feature_importance_report.py</code>를 <code>main.py</code>가 직접 import — &ldquo;scripts는 core/library를 소비만 한다&rdquo;는 레이어 원칙과 반대 방향</li>
