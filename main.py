@@ -112,7 +112,7 @@ def cmd_train(args):
     logger.info(f"모델 저장 완료: {version}")
 
     if version:
-        from scripts.feature_importance_report import generate_report, _load_meta
+        from core.feature_importance_report import generate_report, _load_meta
         report_path = generate_report(trainer, _load_meta(version))
         if report_path:
             logger.info(f"변수 중요도 리포트 갱신: {report_path}")

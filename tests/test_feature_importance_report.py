@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from scripts import feature_importance_report as fir
+from core import feature_importance_report as fir
 
 
 class _FakeModel:

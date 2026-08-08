@@ -2,7 +2,7 @@
 변수 중요도 HTML 리포트 생성.
 
 모델을 재학습할 때마다 다시 실행하면 최신 모델 기준으로 리포트가 갱신된다.
-    python -m scripts.feature_importance_report [--version latest]
+    python -m core.feature_importance_report [--version latest]
 """
 import argparse
 import json
