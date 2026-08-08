@@ -82,8 +82,8 @@ def parse_jockey_data(api_response):
 
                 for item in items:
                     jockey_data = {
-                        'jk_no': safe_str(item.get('jkNo', '')),           # TEXT 타입으로 변환
-                        'name': safe_str(item.get('jkName', '')),          # 기수명
+                        'jk_no': safe_str(item.get('jkNo')),           # TEXT 타입으로 변환
+                        'name': safe_str(item.get('jkName')),          # 기수명
                         'total_races': safe_int(item.get('rcCntT', 0)),    # 통산출주횟수
                         'total_wins': safe_int(item.get('ord1CntT', 0)),   # 통산1위횟수
                     }
