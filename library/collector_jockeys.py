@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import API_KEY
 from Utils.database import upsert
 from Utils.logger import get_logger
+from library.parsing import safe_int, safe_str
 logger = get_logger(__name__)
 
 def remove_duplicates_from_collected_jockeys(jockeys_data):
@@ -61,20 +62,6 @@ def fetch_jockey_data(page=1, per_page=1000, options={}):
     except Exception as e:
         logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
         return None, page
-
-def safe_int(value):
-    """안전한 정수 변환"""
-    try:
-        return int(value) if value else 0
-    except (ValueError, TypeError):
-        return 0
-
-def safe_str(value):
-    """안전한 문자열 변환"""
-    try:
-        return str(value) if value else ''
-    except:
-        return ''
 
 def parse_jockey_data(api_response):
     """
