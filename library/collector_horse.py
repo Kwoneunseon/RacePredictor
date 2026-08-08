@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import API_KEY
-from Utils import safe_int, safe_float
+from library.parsing import safe_int, safe_float
 from Utils.database import upsert
 from Utils.logger import get_logger
 logger = get_logger(__name__)

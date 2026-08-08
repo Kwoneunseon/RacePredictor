@@ -9,7 +9,7 @@ import requests
 import time
 
 from config import API_KEY
-from Utils import parse_date, safe_int, safe_float, safe_str
+from library.parsing import parse_date, safe_int, safe_float, safe_str
 from Utils.database import get_client
 from Utils.logger import get_logger
 
