@@ -2,7 +2,7 @@ import pandas as pd
 from Utils.database import upsert, get_client
 from Utils.logger import get_logger
 from core.ev_calculator import EVCalculator
-from core.odds_collector import OddsCollector
+from core.select_odds import OddsCollector
 from config import BANKROLL, BET_PROB_THRESHOLD, MAX_BET_FRACTION
 
 logger = get_logger(__name__)

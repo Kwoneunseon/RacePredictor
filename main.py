@@ -204,7 +204,7 @@ def cmd_predict(args):
 
     from core.race_filter import RaceFilter
     from core.investor import Investor
-    from core.odds_collector import OddsCollector
+    from core.select_odds import OddsCollector
     from Utils.database import get_client
 
     predictor = RacePredictor(trainer, preprocessor)
