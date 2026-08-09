@@ -69,7 +69,7 @@ class RaceFeatureBuilder:
             logger.warning(f"{race_date} 출전 데이터 없음")
             return pd.DataFrame()
 
-        df = self._flatten_entries(result.data)
+        df = self.get_flatten_entries(result.data)
 
         if meet_code is not None:
             df = df[df["meet_code"] == meet_code].reset_index(drop=True)
@@ -107,7 +107,7 @@ class RaceFeatureBuilder:
     # 공통 헬퍼
     # ──────────────────────────────────
 
-    def _flatten_entries(self, data: list) -> pd.DataFrame:
+    def get_flatten_entries(self, data: list) -> pd.DataFrame:
         rows = []
         for r in data:
             flat = {k: v for k, v in r.items() if not isinstance(v, dict)}

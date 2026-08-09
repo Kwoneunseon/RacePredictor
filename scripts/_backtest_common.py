@@ -81,7 +81,7 @@ def load_historical_data(start_date: str, end_date: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     fb = RaceFeatureBuilder()
-    return fb._flatten_entries(all_entries)
+    return fb.get_flatten_entries(all_entries)
 
 
 def run_predictions(start_date: str, end_date: str):
