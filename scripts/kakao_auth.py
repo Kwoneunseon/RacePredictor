@@ -3,6 +3,9 @@
 한 번만 실행하면 .env에 access_token + refresh_token 저장됨
 이후 자동 갱신
 """
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import requests
 import re
 from pathlib import Path

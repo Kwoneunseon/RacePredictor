@@ -72,7 +72,7 @@ def send_message(text: str) -> bool:
     refresh_token = _load_env_value("KAKAO_REFRESH_TOKEN")
 
     if not access_token:
-        logger.error("KAKAO_ACCESS_TOKEN이 비어있습니다. kakao_auth.py를 먼저 실행하세요.")
+        logger.error("KAKAO_ACCESS_TOKEN이 비어있습니다. `python -m scripts.kakao_auth`를 먼저 실행하세요.")
         return False
 
     def _do_send(token: str) -> requests.Response:
@@ -104,7 +104,7 @@ def send_message(text: str) -> bool:
             if new_token:
                 resp = _do_send(new_token)
             else:
-                logger.error("토큰 갱신 실패. kakao_auth.py를 다시 실행하세요.")
+                logger.error("토큰 갱신 실패. `python -m scripts.kakao_auth`를 다시 실행하세요.")
                 return False
         else:
             logger.error(f"카카오톡 전송 실패 (code={code}): {result.get('msg', '')}")
