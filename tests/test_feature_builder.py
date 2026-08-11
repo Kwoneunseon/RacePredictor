@@ -28,7 +28,7 @@ def test_training_grade_일반():
 
 
 # ──────────────────────────────────────────────
-# _flatten_entries 단위 테스트 (DB 불필요)
+# get_flatten_entries 단위 테스트 (DB 불필요)
 # ──────────────────────────────────────────────
 def make_raw_entry(horse_id="H1", race_date="2026-06-07"):
     return {
@@ -57,7 +57,7 @@ def make_raw_entry(horse_id="H1", race_date="2026-06-07"):
 def test_flatten_entries_extracts_nested_fields():
     from core.feature_builder import RaceFeatureBuilder
     fb = RaceFeatureBuilder()
-    df = fb._flatten_entries([make_raw_entry()])
+    df = fb.get_flatten_entries([make_raw_entry()])
     assert df["horse_name"].iloc[0] == "테스트마"
     assert df["horse_age"].iloc[0] == 4
     assert df["meet_code"].iloc[0] == 1
@@ -69,7 +69,7 @@ def test_flatten_entries_extracts_nested_fields():
 def test_flatten_entries_multiple_rows():
     from core.feature_builder import RaceFeatureBuilder
     fb = RaceFeatureBuilder()
-    df = fb._flatten_entries([make_raw_entry("H1"), make_raw_entry("H2")])
+    df = fb.get_flatten_entries([make_raw_entry("H1"), make_raw_entry("H2")])
     assert len(df) == 2
     assert set(df["horse_id"]) == {"H1", "H2"}
 

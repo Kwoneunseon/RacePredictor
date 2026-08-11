@@ -57,7 +57,7 @@ def _fetch_race_entries(args) -> "pd.DataFrame":
 
     logger.info(f"race_entries 수집: {len(all_entries)}건")
     fb = RaceFeatureBuilder()
-    return fb._flatten_entries(all_entries)
+    return fb.get_flatten_entries(all_entries)
 
 
 def cmd_tune(args):
