@@ -25,10 +25,11 @@ scheduler.py          # APScheduler 기반 자동 실행
 library/              # 외부 데이터 수집 (공공 API 크롤링/스크레이핑 → Supabase 저장)
   collector_*.py       # races/horse/jockeys/trainers/training/section_records
   scraper_*.py         # odds/score/weights
+  parsing.py           # 공용 파싱 헬퍼(parse_date/safe_int/safe_float/safe_str) — library 전용
 
 core/                  # ML 파이프라인 (핵심 비즈니스 로직)
   preprocessor.py       # 인코딩/스케일링
-  feature_builder.py    # 피처 엔지니어링 (가장 크고 복잡한 모듈, 858줄)
+  feature_builder.py    # 피처 엔지니어링 (가장 크고 복잡한 모듈, 857줄)
   trainer.py             # XGBoost/LightGBM 학습, top3 분류기/ranker
   predictor.py           # 예측
   model_manager.py       # 모델 저장/로드/버전 관리 (joblib)
@@ -37,14 +38,17 @@ core/                  # ML 파이프라인 (핵심 비즈니스 로직)
   select_odds.py         # 배당 조회(스크래핑+DB 폴백, library.scraper_odds 호출)
   history_rebuilder.py   # 과거 성적 캐시 재구성
   prediction_report.py   # 예측 결과 리포트
+  feature_importance_report.py  # 변수 중요도 리포트(main.py cmd_train이 직접 호출)
   race_filter.py         # 경주 필터링
+  rank_distribution.py   # Harville 확률 모델 — 구현·테스트 완료, 파이프라인 미연결
 
 Utils/                 # 전 레이어 공용 (config 다음으로 낮은 레벨)
   database.py            # Supabase 클라이언트 싱글톤 + 재시도 패치
   logger.py
   kakaotalk.py           # 알림
 
-scripts/                # 1회성 백테스트/분석 스크립트 (core를 소비만 해야 함)
+scripts/                # 1회성 스크립트(백테스트/분석/최초 설정 등) — core를 소비만 해야 함
+  kakao_auth.py          # 카카오 토큰 최초 발급(대화형, 아무도 import 안 함)
 tests/                  # pytest, core/Utils 구조를 그대로 미러링
 migrations/             # DB 스키마 SQL (번호 파일)
 models/                 # 학습된 모델 아티팩트 (joblib pkl + json meta)
