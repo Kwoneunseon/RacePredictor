@@ -140,7 +140,7 @@
   <h1>경마 자동 투자 봇 — 아키텍처</h1>
   <p class="subtitle">
     코드 파이프라인 구조 스냅샷. 이 문서는 작성 시점의 구조를 담고 있으며,
-    구조 정리 작업(B단계 경계 재정립 &middot; A단계 네이밍 정리)이 끝나면 갱신됩니다.
+    B단계(경계 재정립)는 완료됐고, A단계(네이밍 정리)가 끝나면 다시 갱신됩니다.
   </p>
 
   <section id="diagram">
@@ -156,7 +156,7 @@
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="stage"><p class="stage-title">예측</p><p><code>core/predictor.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
-      <div class="stage"><p class="stage-title">베팅</p><p><code>core/ev_calculator.py</code><br><code>core/odds_collector.py</code><br><code>core/investor.py</code></p></div>
+      <div class="stage"><p class="stage-title">베팅</p><p><code>core/ev_calculator.py</code><br><code>core/select_odds.py</code><br><code>core/investor.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="stage"><p class="stage-title">리포트</p><p><code>core/prediction_report.py</code></p></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
@@ -164,12 +164,6 @@
     </div>
     <div class="cross-layer">
       <code>Utils/</code> — 전 레이어 공용 (DB 싱글톤&middot;로거&middot;카카오톡 알림)
-    </div>
-    <div class="exception-note">
-      <strong>예외:</strong> <code>scripts/</code>는 원칙적으로 core/library를 소비만 하는
-      독립 브랜치이지만, <code>scripts/feature_importance_report.py</code>는
-      <code>main.py</code>의 <code>cmd_train()</code>이 직접 import해서 사용합니다
-      (레이어 원칙 위반 — 구조 정리 B단계 후보).
     </div>
     <div class="exception-note">
       <strong>미연결:</strong> 점선 테두리로 표시한 <code>확률 모델</code> 단계는
@@ -219,7 +213,7 @@
       <h3>베팅</h3>
       <ul>
         <li><code>core/ev_calculator.py</code> — EV(기대값)/켈리 비율 베팅 계산</li>
-        <li><code>core/odds_collector.py</code> — 배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback)</li>
+        <li><code>core/select_odds.py</code> — 배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback)</li>
         <li><code>core/investor.py</code> — 베팅 판단·기록(<code>betting_records</code> 저장)과 결과 정산</li>
       </ul>
     </div>
@@ -227,7 +221,7 @@
       <h3>리포트</h3>
       <ul>
         <li><code>core/prediction_report.py</code> — 예측 결과 HTML 리포트 생성</li>
-        <li><code>scripts/feature_importance_report.py</code> — 변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</li>
+        <li><code>core/feature_importance_report.py</code> — 변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</li>
       </ul>
     </div>
     <div class="stage-detail">
@@ -255,6 +249,7 @@
       <tr><td><code>scraper_odds.py</code></td><td>현재 단승배당 스크래핑(KRA 경마속보)</td></tr>
       <tr><td><code>scraper_score.py</code></td><td>확정 배당(단승/연승/복승/쌍승/복연승/삼복승/삼쌍승) 스크래핑 — ScoreInfo.do</td></tr>
       <tr><td><code>scraper_weights.py</code></td><td>마체중 스크래핑</td></tr>
+      <tr><td><code>parsing.py</code></td><td>공용 파싱/변환 헬퍼(<code>parse_date</code>, <code>safe_int</code>, <code>safe_float</code>, <code>safe_str</code>). 원래 <code>Utils/function.py</code>였으나 실사용처가 <code>library/</code> 뿐임을 확인해 B단계에서 이관</td></tr>
       <tr><td><code>__init__.py</code></td><td>패키지 공개 함수 재노출</td></tr>
       </table>
     </div>
@@ -264,7 +259,8 @@
       <table>
       <tr><th>파일</th><th>책임</th></tr>
       <tr><td><code>history_rebuilder.py</code></td><td><code>horse_race_history</code> 테이블 재구성</td></tr>
-      <tr><td><code>odds_collector.py</code></td><td>배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback)</td></tr>
+      <tr><td><code>select_odds.py</code></td><td>배당 조회 파사드(<code>library/scraper_odds.py</code> 호출, 실패 시 DB 중앙값 fallback). 구 <code>odds_collector.py</code> — B단계에서 <code>library/scraper_odds.py</code>와의 이름 혼동 해소를 위해 개명(클래스명 <code>OddsCollector</code>는 유지)</td></tr>
+      <tr><td><code>feature_importance_report.py</code></td><td>변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신). 원래 <code>scripts/</code>에 있었으나 레이어 원칙(scripts는 core/library를 소비만 함) 위반이라 B단계에서 이관</td></tr>
       <tr><td><code>race_filter.py</code></td><td>베팅 대상 경주 필터링(거리/등급/두수 조건)</td></tr>
       <tr><td><code>preprocessor.py</code></td><td>학습용 피처 전처리(라벨 인코딩 등)</td></tr>
       <tr><td><code>feature_builder.py</code></td><td>DB에서 피처를 수집&middot;계산해 DataFrame으로 반환</td></tr>
@@ -282,12 +278,10 @@
     <div class="table-scroll">
       <table>
       <tr><th>파일</th><th>책임</th></tr>
-      <tr><td><code>function.py</code></td><td>공용 헬퍼(날짜 파싱, <code>safe_int</code>/<code>safe_float</code> 등)</td></tr>
       <tr><td><code>logger.py</code></td><td>로거 설정</td></tr>
       <tr><td><code>database.py</code></td><td>Supabase 클라이언트 싱글톤 + <code>upsert</code> 헬퍼</td></tr>
       <tr><td><code>kakaotalk.py</code></td><td>카카오톡 메시지 전송(토큰 만료 시 자동 갱신)</td></tr>
-      <tr><td><code>kakao_auth.py</code></td><td>카카오톡 토큰 최초 발급(1회성 스크립트)</td></tr>
-      <tr><td><code>__init__.py</code></td><td>패키지 공개 함수 재노출</td></tr>
+      <tr><td><code>__init__.py</code></td><td>비어있음. B단계에서 <code>function.py</code>/<code>kakao_auth.py</code>가 각각 <code>library/</code>·<code>scripts/</code>로 이관되며 재노출 대상이 없어짐</td></tr>
       </table>
     </div>
 
@@ -302,7 +296,7 @@
       <tr><td><code>backtest_quinella_place_heuristic.py</code></td><td>복연승 휴리스틱 백테스트(정식 Harville 모델 구현 전 임시 대체)</td></tr>
       <tr><td><code>backfill_place_payouts.py</code></td><td>제주&middot;부산경남 연승 확정배당 소급 백필</td></tr>
       <tr><td><code>diagnose_calibration.py</code></td><td>확률 캘리브레이션(isotonic) 진단</td></tr>
-      <tr><td><code>feature_importance_report.py</code></td><td>변수 중요도 HTML 리포트 생성(<code>main.py</code>가 직접 호출, 학습 시마다 갱신)</td></tr>
+      <tr><td><code>kakao_auth.py</code></td><td>카카오톡 토큰 최초 발급(1회성 대화형 스크립트). 원래 <code>Utils/</code>에 있었으나 아무도 import하지 않는 1회성 스크립트라 B단계에서 이관</td></tr>
       </table>
     </div>
 
@@ -337,12 +331,19 @@
     <p class="note">
       아래 항목은 다음 단계(B: 경계 재정립 &middot; A: 네이밍 정리)의 입력 자료입니다.
     </p>
+    <p class="note">
+      2026-08-11 B단계(경계 재정립) 완료로 아래 3건은 해소됨: <code>scripts/feature_importance_report.py</code>
+      레이어 위반(→ <code>core/</code>로 이관), <code>Utils/function.py</code> 그랩백 파일(→ <code>library/parsing.py</code>로
+      이관), <code>core/odds_collector.py</code>/<code>library/scraper_odds.py</code> 이름 혼동(→ <code>core/select_odds.py</code>로 개명).
+    </p>
     <ul>
-      <li><code>scripts/feature_importance_report.py</code>를 <code>main.py</code>가 직접 import — &ldquo;scripts는 core/library를 소비만 한다&rdquo;는 레이어 원칙과 반대 방향</li>
-      <li><code>Utils/function.py</code> — 이름만으로 내용을 알 수 없는 그랩백(grab-bag) 유틸리티 파일</li>
-      <li><code>core/odds_collector.py</code>와 <code>library/scraper_odds.py</code> — 이름이 비슷하지만 레이어와 역할이 다름(전자는 core의 배당 조회 클래스, 후자는 library의 스크래핑 함수) — 새로 온 사람이 혼동하기 쉬움</li>
       <li><code>core/rank_distribution.py</code>(Harville 확률 모델) — 구현&middot;테스트는 완료됐지만 <code>core/predictor.py</code>/<code>core/investor.py</code> 어디에서도 import되지 않아 예측&middot;베팅 파이프라인과 연결돼 있지 않음</li>
       <li><code>core/investor.py</code>의 <code>save_bets()</code>/<code>update_results()</code> — <code>betting_records</code> 저장&middot;정산 로직이 구현돼 있지만 <code>main.py</code>는 <code>decide()</code>만 호출함(실제 베팅 기록/정산은 아직 파이프라인에 연결 안 됨)</li>
+      <li><code>core/select_odds.py</code>와 <code>core/feature_builder.py</code> — 배당 조회 매핑 로직이 두 곳에 중복 구현됨(전자는 실시간 베팅용, 후자는 학습 피처용). B단계에서 이름 혼동은 해소했지만 로직 통합은 회귀 위험 때문에 범위에서 제외 — 별도 스펙 필요</li>
+      <li><code>main.py</code>의 <code>_fetch_race_entries()</code>와 <code>scripts/_backtest_common.py</code>의 동명 함수 — <code>race_entries</code> 조회+페이지네이션+평탄화 로직이 거의 동일하게 중복 구현돼 있음(B단계 Task 6 리뷰에서 발견)</li>
+      <li><code>library/collector_trainers.py</code> — <code>rcCntT</code>/<code>ord1CntT</code>를 가드 없이 <code>int()</code>로 변환하는데, 이 변환이 페이지 전체를 감싸는 <code>try</code> 안에 있어서 값 하나만 숫자가 아니어도 그 페이지의 나머지 조교사 데이터가 통째로 조용히 유실됨(B단계 Task 3 리뷰에서 발견, <code>library/collector_jockeys.py</code>는 이미 <code>library/parsing.safe_int</code>로 이 문제를 피함)</li>
+      <li><code>core/select_odds.py</code>의 <code>_load_median_odds()</code> — <code>race_entries</code> 전체를 페이지네이션 없이 한 번에 조회해 PostgREST 기본 1000행 제한에 걸림(가장 큰 테이블인데 다른 파일들과 달리 <code>.range()</code> 페이지네이션이 없음), 폴백 경로에 N+1 쿼리도 있음(B단계 Task 5 리뷰에서 발견)</li>
+      <li><code>tests/test_collector_races_payouts.py</code> — <code>library.collector_races</code>의 <code>filter_duplicates_in_payouts</code>를 import하는데 이 함수가 아직 커밋되지 않은 별도 작업(WIP)에만 존재함. 커밋된 상태를 그대로 clone/checkout하면 이 테스트가 수집 단계에서 <code>ImportError</code>로 실패함 — 로컬 작업 트리 기준 테스트 통과와 커밋 기준 테스트 통과가 다르다는 뜻(B단계 최종 리뷰에서 발견)</li>
     </ul>
   </section>
 </main>
