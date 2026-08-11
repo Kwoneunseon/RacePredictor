@@ -40,7 +40,7 @@ cp .env.example .env
 알림용)이며, 비워두면 로그에 경고만 남고 나머지 파이프라인은 정상
 진행됩니다.
 
-카카오톡 알림을 쓰려면 `python -m Utils.kakao_auth`로 토큰을 최초 1회
+카카오톡 알림을 쓰려면 `python -m scripts.kakao_auth`로 토큰을 최초 1회
 발급받으세요(access/refresh 토큰이 `.env`에 저장되고, 이후 만료 시
 `kakaotalk.py`가 자동 갱신합니다).
 
