@@ -52,6 +52,7 @@ class RaceFeatureBuilder:
 
     - build_for_prediction(race_date): 예측용. DB에서 race_entries 조회 후 피처 전부 붙임.
     - build_for_training(df, end_date): 학습용. 이미 조회된 df에 피처 조인.
+    - get_flatten_entries(data): 중첩된 Supabase 조인 결과를 평평한 DataFrame으로 변환.
     """
 
     # ──────────────────────────────────
@@ -103,11 +104,9 @@ class RaceFeatureBuilder:
         df = self._fetch_running_style_for_training(df)
         return df
 
-    # ──────────────────────────────────
-    # 공통 헬퍼
-    # ──────────────────────────────────
-
-    def get_flatten_entries(self, data: list) -> pd.DataFrame:
+    @staticmethod
+    def get_flatten_entries(data: list) -> pd.DataFrame:
+        """중첩된 Supabase 조인 결과(dict)를 평평한 DataFrame으로 변환. 순수 변환이며 인스턴스 상태를 쓰지 않음."""
         rows = []
         for r in data:
             flat = {k: v for k, v in r.items() if not isinstance(v, dict)}
