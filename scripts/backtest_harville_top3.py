@@ -38,13 +38,13 @@ def run_backtest(start_date: str, end_date: str):
     if result_df is None:
         return
 
-    result_df = attach_harville_top3(result_df)
-    result_df = result_df.dropna(subset=["harville_top3_prob"])
-    if result_df.empty:
-        print("[오류] Harville 연승확률 계산 가능한 경주 없음")
-        return
-
     with capture_report("harville_top3") as rc:
+        result_df = attach_harville_top3(result_df)
+        result_df = result_df.dropna(subset=["harville_top3_prob"])
+        if result_df.empty:
+            print("[오류] Harville 연승확률 계산 가능한 경주 없음")
+            return
+
         def best_pick(grp):
             best = grp.loc[grp["harville_top3_prob"].idxmax()]
             return pd.Series({
