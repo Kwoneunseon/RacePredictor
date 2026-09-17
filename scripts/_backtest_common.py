@@ -181,3 +181,57 @@ def attach_harville_top3(result_df: pd.DataFrame) -> pd.DataFrame:
         print(f"  [주의] Harville 연승확률 계산 불가 경주 {n_skipped_races}건 스킵 "
               f"(출전마 3두 미만 또는 win_prob 합<=0)")
     return out
+
+
+def build_harville_pair_table(result_df: pd.DataFrame) -> pd.DataFrame:
+    """race_id별로 win_prob을 강도점수 삼아 pair_top3_probabilities()를 계산하고,
+    확률이 가장 높은 페어(복연승 픽)와 적중 여부를 담은 경주 단위 테이블을 반환한다.
+
+    기존 임시 휴리스틱(scripts/backtest_quinella_place_heuristic.py의
+    build_quinella_table — "확률 상위 2마리를 그냥 묶는" 방식)과 달리, 두 말이
+    동시에 top3에 들 결합확률 자체를 최대화하는 페어를 고른다
+    ([[project_multi_bet_probability_model]] Phase 2).
+
+    반환 컬럼: race_id, race_date, n_horses, harville_pair_prob(픽된 페어의
+    확률), harville_pair_hit(픽된 페어가 실제로 둘 다 1~3착인지),
+    random_baseline(무작위 2마리 픽 기대 적중률 = 6/(n*(n-1))).
+
+    출전마 3두 미만이거나 win_prob 합이 0 이하인 경주는 결과에서 제외한다.
+    """
+    rows = []
+    skipped_small = 0
+    skipped_degenerate = 0
+    for race_id, grp in result_df.groupby("race_id", sort=False):
+        n = len(grp)
+        if n < 3:
+            skipped_small += 1
+            continue
+
+        strengths = grp["win_prob"].to_numpy()
+        if strengths.sum() <= 0:
+            skipped_degenerate += 1
+            continue
+
+        pair = pair_top3_probabilities(strengths)
+        iu = np.triu_indices(n, k=1)
+        best_idx = np.argmax(pair[iu])
+        a, b = iu[0][best_idx], iu[1][best_idx]
+
+        final_ranks = grp["final_rank"].to_numpy()
+        hit = bool(final_ranks[a] <= 3 and final_ranks[b] <= 3)
+
+        rows.append({
+            "race_id": race_id,
+            "race_date": str(grp["race_date"].iloc[0]),
+            "n_horses": n,
+            "harville_pair_prob": float(pair[a, b]),
+            "harville_pair_hit": hit,
+            "random_baseline": 6.0 / (n * (n - 1)),
+        })
+
+    if skipped_small:
+        print(f"  [주의] 출전마 3두 미만 경주 {skipped_small}건은 복연승 정의상 스킵")
+    if skipped_degenerate:
+        print(f"  [주의] win_prob 합<=0 경주 {skipped_degenerate}건 스킵")
+
+    return pd.DataFrame(rows)
