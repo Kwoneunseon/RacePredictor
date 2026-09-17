@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 from Utils.database import get_client
 from core.feature_builder import RaceFeatureBuilder
 from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.model_manager import ModelManager
+from core.rank_distribution import top3_marginal_probabilities, pair_top3_probabilities
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "BackTestReport"
 
@@ -149,3 +151,33 @@ def run_predictions(start_date: str, end_date: str):
     result_df = result_df.join(n_horses_map, on="race_id")
 
     return result_df
+
+
+def attach_harville_top3(result_df: pd.DataFrame) -> pd.DataFrame:
+    """race_id별로 win_prob을 강도점수 삼아 Harville 순차소거로 유도한
+    연승확률(harville_top3_prob) 컬럼을 추가해 반환한다.
+
+    core.rank_distribution.top3_marginal_probabilities()는 출전마 3두 미만이거나
+    강도 합이 0 이하면 ValueError를 던지므로, 그런 경주는 harville_top3_prob을
+    NaN으로 채우고 건너뛴다(전체 백테스트를 중단시키지 않기 위함,
+    [[project_multi_bet_probability_model]] 참고).
+
+    groupby(...)["win_prob"].transform(...)를 쓰는 이유: groupby.apply()에
+    그룹핑 컬럼(race_id)이 포함된 프레임을 통째로 넘기면 pandas가
+    DeprecationWarning을 낸다(향후 그룹핑 컬럼이 자동 제외될 예정) - transform은
+    win_prob 컬럼 하나만 다루므로 이 문제가 없다.
+    """
+    def _harville_col(s: pd.Series) -> pd.Series:
+        strengths = s.to_numpy()
+        if len(strengths) < 3 or strengths.sum() <= 0:
+            return pd.Series(np.nan, index=s.index)
+        return pd.Series(top3_marginal_probabilities(strengths), index=s.index)
+
+    out = result_df.copy()
+    out["harville_top3_prob"] = out.groupby("race_id", sort=False)["win_prob"].transform(_harville_col)
+
+    n_skipped_races = out.loc[out["harville_top3_prob"].isna(), "race_id"].nunique()
+    if n_skipped_races:
+        print(f"  [주의] Harville 연승확률 계산 불가 경주 {n_skipped_races}건 스킵 "
+              f"(출전마 3두 미만 또는 win_prob 합<=0)")
+    return out
