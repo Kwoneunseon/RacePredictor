@@ -56,7 +56,9 @@ OPTUNA_N_TRIALS = 60      # 하이퍼파라미터 탐색 횟수 (많을수록 �
 
 FEATURE_COLUMNS = [
     # 말 기본 정보
-    "horse_age", "horse_class_num", "horse_weight",
+    # horse_class_num·horse_class_vs_mean 제외: horses.rank는 말당 1행 덮어쓰기 스냅샷(2026-05-25 일괄 갱신)이라
+    # 과거 경주에 미래 class(승급/강등)가 새어 들어감 — 경주 시점 class 이력이 생기기 전까지 제외.
+    "horse_age", "horse_weight",
     # 경주 정보
     "race_distance", "race_grade_enc",
     # 기수/조교사 통산 성적
@@ -65,7 +67,7 @@ FEATURE_COLUMNS = [
     "horse_win_rate", "horse_top3_rate",
     "prev_total_races", "prev_5_avg_rank", "prev_total_avg_rank",
     # 경주 내 상대적 특성
-    "horse_class_vs_mean", "win_rate_vs_mean",
+    "win_rate_vs_mean",
     # 최근 성적 (30일)
     "jockey_recent_win_rate", "trainer_recent_win_rate",
     # 조교 상태
