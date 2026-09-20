@@ -89,10 +89,13 @@ def make_mock_client(entry_data=None):
     # execute().data만 설정하면 됨)
     mock_chain.in_.return_value.lt.return_value.execute.return_value.data = []
     mock_chain.in_.return_value.lt.return_value.gt.return_value.execute.return_value.data = []
+    mock_chain.in_.return_value.lt.return_value.gt.return_value.lt.return_value.execute.return_value.data = []
     mock_chain.in_.return_value.lt.return_value.not_.is_.return_value.execute.return_value.data = []
     mock_chain.in_.return_value.lt.return_value.gt.return_value.not_.is_.return_value.execute.return_value.data = []
+    mock_chain.in_.return_value.lt.return_value.gt.return_value.lt.return_value.not_.is_.return_value.execute.return_value.data = []
     mock_chain.in_.return_value.gte.return_value.lt.return_value.execute.return_value.data = []
     mock_chain.gte.return_value.lt.return_value.not_.is_.return_value.execute.return_value.data = []
+    mock_chain.gte.return_value.lt.return_value.gt.return_value.lt.return_value.execute.return_value.data = []
     # _fetch_assigned_weight: .select(...).in_("race_id", ...).execute() (중간 필터 없음)
     mock_chain.in_.return_value.execute.return_value.data = []
 
@@ -161,7 +164,7 @@ def test_fetch_distance_rates_computes_speed_at_distance():
     df = pd.DataFrame({"horse_id": ["H1"], "race_distance": [1200]})
 
     client = MagicMock()
-    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value
+    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value.lt.return_value
     chain.execute.return_value.data = [
         {"horse_id": "H1", "final_rank": 2, "finish_time": 80.0, "races": {"race_distance": 1200}},
         {"horse_id": "H1", "final_rank": 1, "finish_time": 75.0, "races": {"race_distance": 1200}},
@@ -179,7 +182,7 @@ def test_fetch_distance_rates_speed_defaults_to_zero_when_no_history():
     df = pd.DataFrame({"horse_id": ["H1"], "race_distance": [1200]})
 
     client = MagicMock()
-    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value
+    chain = client.table.return_value.select.return_value.in_.return_value.lt.return_value.gt.return_value.lt.return_value
     chain.execute.return_value.data = []
 
     result = fb._fetch_distance_rates(df, "2026-06-07", client)
@@ -296,3 +299,122 @@ def test_running_style_score_falls_back_to_3c_when_1c_not_applicable():
     ]
     result = fb._compute_running_style(df, past_rows)
     assert result.loc[0, "running_style_score"] == pytest.approx(2.0)
+
+
+# ──────────────────────────────────────────────
+# 90번대(비착순 상태 코드) 필터
+# ──────────────────────────────────────────────
+class _RecordingQuery:
+    """PostgREST 체인 호출을 순서 무관하게 기록하는 가짜 쿼리 빌더 (DB 미접속)."""
+
+    def __init__(self, data, calls):
+        self._data = data
+        self.calls = calls
+
+    def __getattr__(self, name):
+        def _record(*args, **kwargs):
+            self.calls.append((name, args))
+            return self
+        return _record
+
+    @property
+    def not_(self):
+        return self
+
+    def execute(self):
+        return MagicMock(data=self._data)
+
+
+class _RecordingClient:
+    def __init__(self, data_by_table):
+        self.data_by_table = data_by_table
+        self.calls = []
+
+    def table(self, name):
+        self.calls.append(("table", (name,)))
+        return _RecordingQuery(self.data_by_table.get(name, []), self.calls)
+
+
+def _has_valid_rank_filter(calls):
+    from config import NON_FINISH_RANK_MIN
+    return ("gt", ("final_rank", 0)) in calls and ("lt", ("final_rank", NON_FINISH_RANK_MIN)) in calls
+
+
+def test_fetch_recent_rates_query_filters_valid_rank_range():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"jk_no": ["J1"], "trainer_id": ["T1"]})
+    client = _RecordingClient({"race_entries": [{"jk_no": "J1", "trainer_id": "T1", "final_rank": 1}]})
+    fb._fetch_recent_rates(df, "2026-06-07", client)
+    assert _has_valid_rank_filter(client.calls)
+
+
+def test_fetch_last_race_features_query_filters_valid_rank_range():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "horse_weight": [480]})
+    client = _RecordingClient({"race_entries": []})
+    fb._fetch_last_race_features(df, "2026-06-07", client)
+    assert _has_valid_rank_filter(client.calls)
+
+
+def test_fetch_speed_features_query_filters_valid_rank_range():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"]})
+    client = _RecordingClient({"race_entries": []})
+    fb._fetch_speed_features(df, "2026-06-07", client)
+    assert _has_valid_rank_filter(client.calls)
+
+
+def test_fetch_distance_rates_query_filters_valid_rank_range():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "race_distance": [1200]})
+    client = _RecordingClient({"race_entries": []})
+    fb._fetch_distance_rates(df, "2026-06-07", client)
+    assert _has_valid_rank_filter(client.calls)
+
+
+def test_fetch_combo_features_query_filters_valid_rank_range():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "meet_code": [1]})
+    client = _RecordingClient({"race_entries": []})
+    fb._fetch_combo_features(df, "2026-06-07", client)
+    assert _has_valid_rank_filter(client.calls)
+
+
+def test_compute_running_style_excludes_non_finish_ranks():
+    """final_rank 99(경주취소)/93(제외)/0(미기입) 행은 러닝스타일 평균에 들어가지 않는다."""
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1", "H2"], "race_date": ["2026-07-12"] * 2})
+    past_rows = [
+        {"horse_id": "H1", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 2},   # delta 3
+        {"horse_id": "H1", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 99},  # 제외돼야 함 (-94)
+        {"horse_id": "H1", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 93},
+        {"horse_id": "H1", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 0},
+        {"horse_id": "H2", "sj_1c_ord": 5, "sj_3c_ord": 4, "final_rank": 99},  # 유효 행 없음 -> 0.0
+    ]
+    result = fb._compute_running_style(df, past_rows).set_index("horse_id")
+    assert result.loc["H1", "running_style_score"] == pytest.approx(3.0)
+    assert result.loc["H2", "running_style_score"] == 0.0
+
+
+def test_fetch_running_style_for_training_excludes_non_finish_ranks():
+    from core.feature_builder import RaceFeatureBuilder
+    fb = RaceFeatureBuilder()
+    df = pd.DataFrame({"horse_id": ["H1"], "race_date": ["2026-07-12"]})
+    detail = [
+        {"horse_id": "H1", "race_id": "R1", "sj_1c_ord": 5, "sj_3c_ord": 4},
+        {"horse_id": "H1", "race_id": "R2", "sj_1c_ord": 5, "sj_3c_ord": 4},
+    ]
+    ranks = [
+        {"race_id": "R1", "horse_id": "H1", "race_date": "2026-06-01", "final_rank": 2},
+        {"race_id": "R2", "horse_id": "H1", "race_date": "2026-06-15", "final_rank": 99},
+    ]
+    client = _RecordingClient({"race_entry_detail": detail, "race_entries": ranks})
+    with patch("core.feature_builder.get_client", return_value=client):
+        result = fb._fetch_running_style_for_training(df)
+    assert result["running_style_score"].iloc[0] == pytest.approx(3.0)

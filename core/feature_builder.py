@@ -2,8 +2,10 @@
 import numpy as np
 import pandas as pd
 import library.scraper_odds as scraper_odds
+from config import NON_FINISH_RANK_MIN
 from Utils.database import get_client
 from Utils.logger import get_logger
+from Utils.ranks import valid_rank_mask
 
 logger = get_logger(__name__)
 
@@ -166,7 +168,7 @@ class RaceFeatureBuilder:
         res = client.table("race_entries")\
             .select("jk_no, trainer_id, final_rank")\
             .gte("race_date", cutoff).lt("race_date", race_date)\
-            .not_.is_("final_rank", "null").execute()
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN).execute()
         if res.data:
             h = pd.DataFrame(res.data)
             h["_is_win"] = (h["final_rank"] == 1).astype(int)
@@ -233,7 +235,7 @@ class RaceFeatureBuilder:
         res = client.table("race_entries")\
             .select("horse_id, race_date, horse_weight")\
             .in_("horse_id", horse_ids).lt("race_date", race_date)\
-            .gt("final_rank", 0).execute()
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN).execute()
         if res.data:
             last_df = pd.DataFrame(res.data)
             last_df = (
@@ -305,7 +307,8 @@ class RaceFeatureBuilder:
         res = client.table("race_entries")\
             .select("horse_id, race_date, finish_time, races(race_distance)")\
             .in_("horse_id", horse_ids).lt("race_date", race_date)\
-            .gt("final_rank", 0).not_.is_("finish_time", "null").execute()
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN)\
+            .not_.is_("finish_time", "null").execute()
         if res.data:
             spd_rows = [{
                 "horse_id": r["horse_id"],
@@ -346,7 +349,7 @@ class RaceFeatureBuilder:
         res = client.table("race_entries")\
             .select("horse_id, final_rank, finish_time, races(race_distance)")\
             .in_("horse_id", horse_ids).lt("race_date", race_date)\
-            .gt("final_rank", 0).execute()
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN).execute()
         if res.data:
             dist_rows = [{
                 "horse_id": r["horse_id"],
@@ -394,7 +397,7 @@ class RaceFeatureBuilder:
         res = client.table("race_entries")\
             .select("horse_id, jk_no, final_rank, race_date, horse_weight, races(meet_code)")\
             .in_("horse_id", horse_ids).lt("race_date", race_date)\
-            .gt("final_rank", 0).execute()
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN).execute()
         if not res.data:
             for col in combo_cols:
                 df[col] = 0.0
@@ -755,6 +758,7 @@ class RaceFeatureBuilder:
         # 1코너 순위 우선, 없으면(짧은 거리) 3코너 순위로 대체
         past_df["_early_ord"] = past_df["sj_1c_ord"].fillna(past_df["sj_3c_ord"])
         past_df = past_df.dropna(subset=["_early_ord", "final_rank"])
+        past_df = past_df[valid_rank_mask(past_df["final_rank"])].copy()  # 0·90번대(비착순) 제외
         past_df["_delta"] = pd.to_numeric(past_df["_early_ord"], errors="coerce") - \
             pd.to_numeric(past_df["final_rank"], errors="coerce")
         style_map = past_df.groupby("horse_id")["_delta"].mean().to_dict()
@@ -810,6 +814,7 @@ class RaceFeatureBuilder:
                                        "race_id, horse_id, race_date, final_rank", "race_id", race_ids)
         rank_df = pd.DataFrame(rank_rows)
         merged = detail_df.merge(rank_df, on=["race_id", "horse_id"], how="inner")
+        merged = merged[valid_rank_mask(merged["final_rank"])]  # 0·90번대(비착순) 제외
 
         df = df.copy()
         df["_race_dt"] = pd.to_datetime(df["race_date"])
