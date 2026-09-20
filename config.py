@@ -37,6 +37,10 @@ MODEL_CONFIG = {
     "performance_threshold": {"min_auc": 0.65},
 }
 
+# race_entries.final_rank >= 90은 착순이 아닌 상태 코드(출전취소/제외/주행중지/실격/경주취소 등), 0은 결과 미기입.
+# 유효 착순 = 1 <= final_rank < NON_FINISH_RANK_MIN. 착순을 소비하는 모든 경로가 이 상수를 참조한다.
+NON_FINISH_RANK_MIN = 90
+
 BANKROLL = 100_000
 MAX_BET_FRACTION = 0.05
 KELLY_FRACTION = 0.25

@@ -1,12 +1,18 @@
 """horse_race_history 테이블 재구성 모듈"""
 import pandas as pd
 import numpy as np
+from config import NON_FINISH_RANK_MIN
 from Utils.database import get_client, upsert
+from Utils.ranks import valid_rank_mask
 from Utils.logger import get_logger
 
 logger = get_logger(__name__)
 PAGE_SIZE = 1000
 BATCH_SIZE = 500
+_HISTORY_COLUMNS = [
+    "horse_id", "as_of_date", "prev_total_races", "prev_wins",
+    "prev_top3", "prev_5_avg_rank", "prev_total_avg_rank",
+]
 
 
 def load_all_entries(client) -> pd.DataFrame:
@@ -15,7 +21,7 @@ def load_all_entries(client) -> pd.DataFrame:
     while True:
         res = client.table("race_entries")\
             .select("horse_id, race_date, final_rank, horse_weight")\
-            .gt("final_rank", 0)\
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN)\
             .order("race_date").order("horse_id")\
             .range(offset, offset + PAGE_SIZE - 1)\
             .execute()
@@ -40,6 +46,8 @@ def compute_history(df: pd.DataFrame) -> pd.DataFrame:
     df["race_date"] = pd.to_datetime(df["race_date"])
     df["final_rank"] = pd.to_numeric(df["final_rank"], errors="coerce")
     df = df.dropna(subset=["horse_id", "race_date", "final_rank"])
+    # 0(미기입)·90번대(취소/제외/주행중지 등 비착순 상태 코드)는 착순 통계에서 제외
+    df = df[valid_rank_mask(df["final_rank"])]
     df = df.sort_values(["horse_id", "race_date"]).reset_index(drop=True)
 
     results = []
@@ -72,7 +80,7 @@ def compute_history(df: pd.DataFrame) -> pd.DataFrame:
                 "prev_total_avg_rank": prev_total_avg,
             })
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(results, columns=_HISTORY_COLUMNS)
 
 
 def rebuild(start_date: str = None, end_date: str = None) -> None:
