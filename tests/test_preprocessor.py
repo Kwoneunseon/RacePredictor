@@ -299,3 +299,70 @@ def test_preprocessor_race_relative_no_race_id():
     p = RacePreprocessor()
     result = p.fit_transform(df)
     assert "race_implied_prob_rank" in result.columns
+
+
+# ──────────────────────────────────────────────
+# 90번대(비착순 상태 코드) 필터: 라벨/추세/누적통계
+# ──────────────────────────────────────────────
+def _history_df(ranks):
+    """H1이 하루 간격으로 ranks 순서대로 출전한 학습용 합성 데이터 (각 경주 단독 출전)."""
+    n = len(ranks)
+    return pd.DataFrame({
+        "horse_id": ["H1"] * n,
+        "race_id": [f"R{i}" for i in range(n)],
+        "race_date": [f"2025-01-{i + 1:02d}" for i in range(n)],
+        "final_rank": ranks,
+        "horse_age": [4] * n,
+        "gender": ["수컷"] * n,
+        "horse_class": ["국5"] * n,
+        "race_distance": [1200] * n,
+        "total_horses": [8] * n,
+        "horse_weight": [480] * n,
+        "race_grade": ["일반"] * n,
+        "track_condition": ["양호"] * n,
+        "weather": ["맑음"] * n,
+        "win_odds": [5.0] * n,
+        "meet_code": [1] * n,
+        "jk_no": ["J1"] * n,
+    })
+
+
+def test_fit_transform_drops_non_finish_rows_so_they_never_become_labels():
+    """91~99·0 행은 학습 행에서 제거되어 is_top3 음성 라벨로 잡히지 않는다."""
+    df = _history_df([1, 99, 92, 0, 2])
+    result = RacePreprocessor().fit_transform(df)
+    assert list(result["final_rank"]) == [1, 2]
+    assert list(result["is_top3"]) == [1, 1]
+    assert list(result["is_winner"]) == [1, 0]
+
+
+def test_fit_transform_recent_rank_trend_ignores_non_finish_ranks():
+    """recent_rank_trend(최근 3경주 기울기)에 9x가 섞이지 않는다.
+    유효 착순 [1,2,3,4] → 마지막 행 기울기 +1. 사이에 99/93이 끼어 있어도 동일해야 한다."""
+    clean = RacePreprocessor().fit_transform(_history_df([1, 2, 3, 4]))
+    dirty = RacePreprocessor().fit_transform(_history_df([1, 99, 2, 93, 3, 4]))
+    assert dirty["final_rank"].tolist() == [1, 2, 3, 4]
+    assert dirty["recent_rank_trend"].tolist() == pytest.approx(clean["recent_rank_trend"].tolist())
+    assert dirty["recent_rank_trend"].iloc[-1] == pytest.approx(1.0)
+
+
+def test_fit_transform_cumulative_win_features_ignore_non_finish_rows():
+    """누적 출전 횟수 기반 피처(horse_track_win_rate)의 분모에 취소/제외 행이 들어가지 않는다."""
+    clean = RacePreprocessor().fit_transform(_history_df([1, 2, 3]))
+    dirty = RacePreprocessor().fit_transform(_history_df([1, 99, 2, 95, 3]))
+    assert dirty["horse_track_win_rate"].tolist() == pytest.approx(clean["horse_track_win_rate"].tolist())
+    assert dirty["horse_win_rate_at_distance"].tolist() == pytest.approx(
+        clean["horse_win_rate_at_distance"].tolist())
+
+
+def test_fit_transform_all_non_finish_returns_empty_without_error():
+    """경주 전체 취소(99)로 유효 행이 하나도 없으면 예외 없이 빈 결과."""
+    df = _history_df([99, 99, 99])
+    result = RacePreprocessor().fit_transform(df)
+    assert len(result) == 0
+
+
+def test_fit_transform_keeps_valid_ranks_up_to_89():
+    df = _history_df([1, 16, 89])
+    result = RacePreprocessor().fit_transform(df)
+    assert result["final_rank"].tolist() == [1, 16, 89]

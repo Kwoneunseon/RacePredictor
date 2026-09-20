@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from Utils.logger import get_logger
+from Utils.ranks import valid_rank_mask
 
 logger = get_logger(__name__)
 
@@ -16,6 +17,7 @@ class RacePreprocessor:
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
+        df = self._drop_non_finish_rows(df)
         df = self._normalize_raw_fields(df)
         df = self._add_target(df)
         df = self._add_derived_features(df)
@@ -92,6 +94,18 @@ class RacePreprocessor:
         if "weather" in df.columns:
             df["weather"] = df["weather"].apply(_normalize_weather)
         return df
+
+    def _drop_non_finish_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        """학습용: 유효 착순(1 <= final_rank < NON_FINISH_RANK_MIN)이 아닌 행(미기입 0,
+        90번대 취소/제외/주행중지 등 상태 코드)을 제거한다. 남겨두면 is_top3 음성 라벨이 되고
+        recent_rank_trend·누적 출전 통계에도 섞인다. 유효 행이 없으면 빈 DataFrame이 된다."""
+        if "final_rank" not in df.columns:
+            return df
+        mask = valid_rank_mask(df["final_rank"])
+        dropped = int((~mask).sum())
+        if dropped:
+            logger.warning(f"비착순 상태 코드/미기입 {dropped}건 학습 데이터에서 제외 (final_rank 0 또는 90 이상)")
+        return df[mask].copy()
 
     def _add_target(self, df: pd.DataFrame) -> pd.DataFrame:
         if "final_rank" in df.columns:
