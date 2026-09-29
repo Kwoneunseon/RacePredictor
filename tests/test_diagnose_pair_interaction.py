@@ -86,3 +86,16 @@ def test_build_pair_table_entry_gap_is_absolute_difference():
     pairs = build_pair_table(df, avg_early_ord)
     row = pairs[(pairs.race_id == "R1") & (pairs.entry_i == 1) & (pairs.entry_j == 4)].iloc[0]
     assert row["entry_gap"] == pytest.approx(3.0)
+
+
+def test_build_pair_table_excludes_races_with_exactly_two_valid_horses():
+    df = pd.DataFrame({
+        "race_id":      ["R4"] * 2,
+        "race_date":    ["2026-01-04"] * 2,
+        "entry_number": [1, 2],
+        "top3_prob":    [0.6, 0.5],
+        "final_rank":   [1, 2],
+    })
+    avg_early_ord = pd.Series([1.0, 1.0], index=df.index)
+    pairs = build_pair_table(df, avg_early_ord)
+    assert len(pairs) == 0  # 유효 말 2두뿐이면 페어를 만들지 않음(둘 다 자동 top3인 퇴화 사례 배제)

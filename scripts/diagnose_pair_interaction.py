@@ -112,7 +112,7 @@ def build_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
     반환 컬럼: race_id, race_date, entry_i, entry_j, p_indep,
     both_early_leader, entry_gap, pace_pressure, label.
 
-    출전마 2두 미만(유효 착순 기준)인 경주는 페어가 생성되지 않는다
+    출전마 3두 미만(유효 착순 기준)인 경주는 페어가 생성되지 않는다
     (자동 스킵, 예외 없음). NaN인 avg_early_ord는 "선행형 아님"으로 취급
     (both_early_leader 비교에서 NaN <= threshold는 False가 되므로 별도
     처리 없이 자연히 반영됨).
@@ -124,7 +124,7 @@ def build_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
     rows = []
     for race_id, grp in df[df["_valid"]].groupby("race_id", sort=False):
         n = len(grp)
-        if n < 2:
+        if n < 3:
             continue
         pace_pressure = int(grp["_early_leader"].sum())
         grp = grp.reset_index(drop=True)
