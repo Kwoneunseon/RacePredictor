@@ -145,5 +145,39 @@ def build_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
     return pd.DataFrame(rows)
 
 
+def fit_offset_logistic(pair_df: pd.DataFrame) -> np.ndarray:
+    """오프셋(logit(p_indep)) 위에 상호작용 보정항 b0~b3을 음의 로그우도
+    최소화로 적합한다. pair_df는 p_indep, both_early_leader, entry_gap,
+    pace_pressure, label 컬럼이 있어야 한다.
+
+    통계 라이브러리(statsmodels) 없이 scipy.optimize로 직접 적합한다
+    (이 프로젝트에 statsmodels가 설치돼 있지 않고, 계수 유의성은 별도로
+    bootstrap_coefficients의 경주 단위 클러스터 부트스트랩으로 검정하므로
+    이 함수 자체는 점추정만 하면 된다).
+
+    반환: [b0, b1, b2, b3] (절편, both_early_leader 계수, entry_gap 계수,
+    pace_pressure 계수)
+    """
+    p_indep = pair_df["p_indep"].to_numpy().clip(1e-6, 1 - 1e-6)
+    offset = np.log(p_indep / (1 - p_indep))
+    X = np.column_stack([
+        pair_df["both_early_leader"].astype(float).to_numpy(),
+        pair_df["entry_gap"].to_numpy(),
+        pair_df["pace_pressure"].to_numpy(),
+    ])
+    y = pair_df["label"].to_numpy().astype(float)
+
+    def neg_log_lik(params: np.ndarray) -> float:
+        b0 = params[0]
+        b = params[1:]
+        eta = np.clip(offset + b0 + X @ b, -30, 30)
+        p = 1.0 / (1.0 + np.exp(-eta))
+        eps = 1e-9
+        return -np.sum(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps))
+
+    result = minimize(neg_log_lik, x0=np.zeros(4), method="BFGS")
+    return result.x
+
+
 if __name__ == "__main__":
     pass
