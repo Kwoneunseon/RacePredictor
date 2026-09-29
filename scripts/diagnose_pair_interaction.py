@@ -37,6 +37,134 @@ DEV_END_DEFAULT = "2026-04-30"
 TEST_START_DEFAULT, TEST_END_DEFAULT = "2026-05-01", "2026-06-25"
 
 
+def _load_predictions_with_ids(start_date: str, end_date: str):
+    """scripts/_backtest_common.py의 run_predictions()와 동일한 순서
+    (모델 로드 -> load_historical_data -> build_for_training ->
+    preprocessor.transform -> predict_proba_top3)를 따르되, horse_id와
+    entry_number를 결과에 유지한다(run_predictions()는 이 두 컬럼을
+    버린다). scripts/_backtest_common.py는 수정하지 않고 이 스크립트
+    안에 독립적으로 재구현한다(공유 파일 미커밋 변경과의 충돌을 피함).
+
+    반환 컬럼: race_id, race_date, horse_id, entry_number, final_rank,
+    top3_prob. 모델/데이터가 없으면 None.
+    """
+    from core.preprocessor import RacePreprocessor
+    from core.trainer import RaceModelTrainer
+    from core.model_manager import ModelManager
+    from core.feature_builder import RaceFeatureBuilder
+
+    print("모델 로드 중...")
+    preprocessor = RacePreprocessor()
+    trainer = RaceModelTrainer()
+    mm = ModelManager()
+    if not mm.load(trainer, preprocessor):
+        print("[오류] 저장된 모델 없음. python main.py --mode train 먼저 실행하세요.")
+        return None
+
+    print(f"과거 데이터 로드 중: {start_date} ~ {end_date} ...")
+    df_raw = load_historical_data(start_date, end_date)
+    if df_raw.empty:
+        print("[오류] 데이터 없음")
+        return None
+    print(f"  로드: {len(df_raw)}건")
+
+    print("피처 빌드 중...")
+    fb = RaceFeatureBuilder()
+    df_feat = fb.build_for_training(df_raw, end_date)
+    df_feat = df_feat.dropna(subset=["horse_age", "race_distance"])
+
+    for col in ("horse_id", "entry_number"):
+        if col not in df_feat.columns:
+            print(f"[오류] build_for_training 이후 '{col}' 컬럼이 사라짐 - "
+                  f"이 함수의 전제가 깨졌으니 core/feature_builder.py의 "
+                  f"파이프라인을 확인해야 함")
+            return None
+
+    print("전처리 중...")
+    df_proc = preprocessor.transform(df_feat)
+
+    print("예측 중...")
+    features = trainer.feature_columns
+    available = [c for c in features if c in df_proc.columns]
+    X = df_proc[available].fillna(0)
+
+    top3_probs = trainer.predict_proba_top3(X, raw=True)
+    if top3_probs is None:
+        print("[오류] top3_models 없음")
+        return None
+
+    result_df = pd.DataFrame({
+        "race_id":      df_feat["race_id"].values,
+        "race_date":    df_feat["race_date"].values,
+        "horse_id":     df_feat["horse_id"].values,
+        "entry_number": df_feat["entry_number"].values,
+        "final_rank":   df_feat["final_rank"].values,
+        "top3_prob":    top3_probs,
+    }, index=df_feat.index)
+
+    return result_df
+
+
+def run_diagnosis(load_start: str, dev_end: str, test_start: str, test_end: str, n_boot: int):
+    df = _load_predictions_with_ids(load_start, test_end)
+    if df is None:
+        return
+
+    print("과거 평균 초반통과순위(leak-safe) 계산 중...")
+    avg_early_ord = fetch_avg_early_ord_asof(df)
+
+    pair_df = build_pair_table(df, avg_early_ord)
+    if pair_df.empty:
+        print("[오류] 페어를 생성할 수 있는 경주가 없습니다")
+        return
+    pair_df["race_date"] = pair_df["race_date"].astype(str)
+
+    with capture_report("pair_interaction") as rc:
+        dev_df = pair_df[pair_df["race_date"] <= dev_end]
+        test_df = pair_df[(pair_df["race_date"] >= test_start) & (pair_df["race_date"] <= test_end)]
+
+        print(f"\n{'='*70}")
+        print(f"  복연승 페어 상호작용 스크리닝: dev<= {dev_end}, test {test_start}~{test_end}")
+        print(f"{'='*70}")
+        print(f"dev 페어 수: {len(dev_df)} ({dev_df['race_id'].nunique()}경주)")
+        print(f"test 페어 수: {len(test_df)} ({test_df['race_id'].nunique()}경주)")
+
+        if dev_df.empty or test_df.empty:
+            print("[오류] dev 또는 test 구간에 페어가 없습니다")
+            return
+
+        coefs = fit_offset_logistic(dev_df)
+        b0, b1, b2, b3 = coefs
+        print(f"\n[dev 적합 계수] b0(절편)={b0:.4f}  b1(both_early_leader)={b1:.4f}  "
+              f"b2(entry_gap)={b2:.4f}  b3(pace_pressure)={b3:.4f}")
+
+        print(f"\n부트스트랩({n_boot}회, 경주 단위 재표본) 95% 신뢰구간 계산 중...")
+        ci = bootstrap_coefficients(dev_df, n_boot=n_boot)
+        label_map = {"b0": "절편", "b1": "both_early_leader", "b2": "entry_gap", "b3": "pace_pressure"}
+        print("\n[신뢰구간]")
+        for key, label in label_map.items():
+            lo, hi = ci[key]
+            sig = "유의함(0 배제)" if (lo > 0 or hi < 0) else "유의하지 않음(0 포함)"
+            print(f"  {label}: [{lo:.4f}, {hi:.4f}]  - {sig}")
+
+        p_indep_test = test_df["p_indep"].to_numpy().clip(1e-6, 1 - 1e-6)
+        offset_test = np.log(p_indep_test / (1 - p_indep_test))
+        eta_test = offset_test + b0 \
+            + b1 * test_df["both_early_leader"].astype(float).to_numpy() \
+            + b2 * test_df["entry_gap"].to_numpy() \
+            + b3 * test_df["pace_pressure"].to_numpy()
+        test_df = test_df.copy()
+        test_df["p_joint"] = 1.0 / (1.0 + np.exp(-np.clip(eta_test, -30, 30)))
+
+        best_idx = test_df.groupby("race_id")["p_joint"].idxmax()
+        best = test_df.loc[best_idx]
+        acc = best["label"].mean()
+        print(f"\n[test 최고 페어 픽 적중률] {acc:.1%}  ({len(best)}경주)")
+        print("  비교 기준(같은 창은 아닐 수 있음): 무작위 7.2%, 기존 휴리스틱 38.5%, Harville 36.5%")
+
+    print(f"\n리포트 저장: {rc.path}")
+
+
 def fetch_avg_early_ord_asof(df: pd.DataFrame) -> pd.Series:
     """말별로 해당 경주 날짜 이전 기록만 사용해 초반 통과순위(1코너, 없으면
     3코너로 대체) 원값의 평균을 leak-safe하게 계산해 df와 같은 인덱스의
@@ -225,4 +353,11 @@ def bootstrap_coefficients(pair_df: pd.DataFrame, n_boot: int = 1000,
 
 
 if __name__ == "__main__":
-    pass
+    parser = argparse.ArgumentParser(description="복연승 페어 상호작용 신호 스크리닝")
+    parser.add_argument("--load-start", default=LOAD_START_DEFAULT)
+    parser.add_argument("--dev-end", default=DEV_END_DEFAULT)
+    parser.add_argument("--test-start", default=TEST_START_DEFAULT)
+    parser.add_argument("--test-end", default=TEST_END_DEFAULT)
+    parser.add_argument("--n-boot", type=int, default=1000)
+    args = parser.parse_args()
+    run_diagnosis(args.load_start, args.dev_end, args.test_start, args.test_end, args.n_boot)
