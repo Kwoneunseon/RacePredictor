@@ -179,5 +179,50 @@ def fit_offset_logistic(pair_df: pd.DataFrame) -> np.ndarray:
     return result.x
 
 
+def bootstrap_coefficients(pair_df: pd.DataFrame, n_boot: int = 1000,
+                            seed: int = 42, coef_clip: float = 20.0) -> dict:
+    """경주 단위(race_id)로 재표본추출하는 부트스트랩으로 b0~b3의 95%
+    신뢰구간을 낸다(이 프로젝트가 다른 백테스트들에서 일관되게 써온 경주
+    단위 클러스터 부트스트랩 방식 - 한 경주 안의 여러 페어 행은 서로
+    강하게 종속돼 있어 행 단위 부트스트랩은 안 된다).
+
+    재표본 안에서 상호작용 피처(특히 both_early_leader)가 라벨을 거의
+    완전분리하면 로지스틱 적합이 scipy상 "성공"으로 보고되면서도 계수가
+    발산한다(코드 리뷰에서 실측: b1=41.3 같은 값이 나옴 - eta가 클리핑
+    구간에 들어가면 그 지점의 기울기가 0이 되어 BFGS가 수렴으로 오판함,
+    result.success 체크로도 못 잡음). 이를 방지하기 위해 각 재표본의
+    적합 결과를 ±coef_clip으로 클리핑하고, 클리핑된 재표본 비율이 5%를
+    넘으면 경고를 출력한다(신뢰구간이 발산값에 왜곡되지 않게 함 +
+    투명성 확보).
+
+    반환: {"b0": (low, high), "b1": (low, high), "b2": (low, high), "b3": (low, high)}
+    """
+    rng = np.random.default_rng(seed)
+    groups = {rid: g for rid, g in pair_df.groupby("race_id", sort=False)}
+    race_ids = np.array(list(groups.keys()))
+
+    samples = []
+    n_clipped = 0
+    for _ in range(n_boot):
+        chosen = rng.choice(race_ids, size=len(race_ids), replace=True)
+        resampled = pd.concat([groups[rid] for rid in chosen], ignore_index=True)
+        coefs = fit_offset_logistic(resampled)
+        clipped = np.clip(coefs, -coef_clip, coef_clip)
+        if not np.allclose(clipped, coefs):
+            n_clipped += 1
+        samples.append(clipped)
+    arr = np.array(samples)
+
+    if n_clipped / n_boot > 0.05:
+        print(f"  [주의] 부트스트랩 재표본 중 {n_clipped}/{n_boot}건({n_clipped/n_boot:.1%})이 "
+              f"발산(|계수|>{coef_clip})해서 클리핑됨 - 신뢰구간을 주의해서 해석할 것")
+
+    names = ["b0", "b1", "b2", "b3"]
+    return {
+        name: (float(np.percentile(arr[:, i], 2.5)), float(np.percentile(arr[:, i], 97.5)))
+        for i, name in enumerate(names)
+    }
+
+
 if __name__ == "__main__":
     pass

@@ -146,3 +146,40 @@ def test_fit_offset_logistic_null_signal_recovers_near_zero():
     assert abs(b1) < 0.3
     assert abs(b2) < 0.1
     assert abs(b3) < 0.1
+
+
+from scripts.diagnose_pair_interaction import bootstrap_coefficients
+
+
+def test_bootstrap_coefficients_returns_expected_structure():
+    rows = []
+    for i in range(30):
+        race_id = f"R{i}"
+        for j in range(3):
+            rows.append({
+                "race_id": race_id,
+                "p_indep": 0.2,
+                "both_early_leader": float(j == 0),
+                "entry_gap": 1.0,
+                "pace_pressure": 2.0,
+                "label": 1 if j == 0 else 0,
+            })
+    pair_df = pd.DataFrame(rows)
+    ci = bootstrap_coefficients(pair_df, n_boot=20, seed=3)
+    assert set(ci.keys()) == {"b0", "b1", "b2", "b3"}
+    for lo, hi in ci.values():
+        assert lo <= hi
+
+
+def test_bootstrap_coefficients_detects_strong_signal_excludes_zero():
+    rows = []
+    for i in range(200):
+        race_id = f"R{i}"
+        rows.append({"race_id": race_id, "p_indep": 0.2, "both_early_leader": 1.0,
+                      "entry_gap": 1.0, "pace_pressure": 2.0, "label": 1})
+        rows.append({"race_id": race_id, "p_indep": 0.2, "both_early_leader": 0.0,
+                      "entry_gap": 1.0, "pace_pressure": 2.0, "label": 0})
+    pair_df = pd.DataFrame(rows)
+    ci = bootstrap_coefficients(pair_df, n_boot=100, seed=5)
+    lo, hi = ci["b1"]
+    assert lo > 0  # 0을 배제해야 함(신호 탐지)
