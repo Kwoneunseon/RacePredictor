@@ -45,6 +45,76 @@ FEATURE_COLUMNS = [
 ]
 
 
+def _load_predictions_with_probs(start_date: str, end_date: str):
+    """모델 로드 -> load_historical_data -> build_for_training ->
+    preprocessor.transform까지 거쳐, 캘리브레이션된 win_prob와 raw
+    top3_prob를 모두 계산해 horse_id/entry_number와 함께 유지한다.
+
+    scripts/diagnose_pair_interaction.py::_load_predictions_with_ids와
+    거의 같은 로직이지만 win_prob도 함께 계산한다는 점이 다르다.
+    scripts/_backtest_common.py는 수정하지 않고 이 스크립트 안에
+    독립적으로 재구현한다(공유 파일 미커밋 변경과의 충돌을 피함).
+
+    반환 컬럼: race_id, race_date, horse_id, entry_number, final_rank,
+    win_prob, top3_prob. 모델/데이터가 없으면 None.
+    """
+    from core.preprocessor import RacePreprocessor
+    from core.trainer import RaceModelTrainer
+    from core.model_manager import ModelManager
+    from core.feature_builder import RaceFeatureBuilder
+
+    print("모델 로드 중...")
+    preprocessor = RacePreprocessor()
+    trainer = RaceModelTrainer()
+    mm = ModelManager()
+    if not mm.load(trainer, preprocessor):
+        print("[오류] 저장된 모델 없음. python main.py --mode train 먼저 실행하세요.")
+        return None
+
+    print(f"과거 데이터 로드 중: {start_date} ~ {end_date} ...")
+    df_raw = load_historical_data(start_date, end_date)
+    if df_raw.empty:
+        print("[오류] 데이터 없음")
+        return None
+    print(f"  로드: {len(df_raw)}건")
+
+    print("피처 빌드 중...")
+    fb = RaceFeatureBuilder()
+    df_feat = fb.build_for_training(df_raw, end_date)
+    df_feat = df_feat.dropna(subset=["horse_age", "race_distance"])
+
+    for col in ("horse_id", "entry_number"):
+        if col not in df_feat.columns:
+            print(f"[오류] build_for_training 이후 '{col}' 컬럼이 사라짐")
+            return None
+
+    print("전처리 중...")
+    df_proc = preprocessor.transform(df_feat)
+
+    print("예측 중...")
+    features = trainer.feature_columns
+    available = [c for c in features if c in df_proc.columns]
+    X = df_proc[available].fillna(0)
+
+    win_probs = trainer.predict_proba(X)
+    top3_probs = trainer.predict_proba_top3(X, raw=True)
+    if top3_probs is None:
+        print("[오류] top3_models 없음")
+        return None
+
+    result_df = pd.DataFrame({
+        "race_id":      df_feat["race_id"].values,
+        "race_date":    df_feat["race_date"].values,
+        "horse_id":     df_feat["horse_id"].values,
+        "entry_number": df_feat["entry_number"].values,
+        "final_rank":   df_feat["final_rank"].values,
+        "win_prob":     win_probs,
+        "top3_prob":    top3_probs,
+    }, index=df_feat.index)
+
+    return result_df
+
+
 def build_classifier_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
                                  early_leader_threshold: float = EARLY_LEADER_THRESHOLD) -> pd.DataFrame:
     """경주별로 유효 착순 말(valid_rank_mask)만 대상으로 모든 쌍(i,j)을 만들어
