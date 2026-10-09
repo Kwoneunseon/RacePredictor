@@ -184,3 +184,35 @@ def test_add_race_relative_features_order_independent():
     top = r2[r2["p_indep"] == 0.6].iloc[0]
     assert top["p_indep_rank_in_race"] == pytest.approx(1.0)
     assert top["p_indep_ratio_to_max"] == pytest.approx(1.0)
+
+
+from scripts.diagnose_pair_classifier import _pick_accuracy
+
+
+def test_pick_accuracy_picks_highest_score_per_race():
+    df = pd.DataFrame({
+        "race_id": ["R1", "R1", "R1", "R2", "R2"],
+        "p_joint": [0.9, 0.3, 0.1, 0.2, 0.8],
+        "label":   [1,   0,   0,   0,   1],
+    })
+    # R1: 최고점(0.9)이 label=1, R2: 최고점(0.8)이 label=1 -> 2/2 = 100%
+    assert _pick_accuracy(df) == pytest.approx(1.0)
+
+
+def test_pick_accuracy_wrong_pick_lowers_accuracy():
+    df = pd.DataFrame({
+        "race_id": ["R1", "R1", "R2", "R2"],
+        "p_joint": [0.9, 0.3, 0.8, 0.2],
+        "label":   [0,   1,   0,   1],
+    })
+    # 두 경주 모두 최고점이 label=0 -> 0/2 = 0%
+    assert _pick_accuracy(df) == pytest.approx(0.0)
+
+
+def test_pick_accuracy_custom_score_column():
+    df = pd.DataFrame({
+        "race_id": ["R1", "R1"],
+        "my_score": [0.4, 0.6],
+        "label":    [1,   0],
+    })
+    assert _pick_accuracy(df, score_col="my_score") == pytest.approx(0.0)

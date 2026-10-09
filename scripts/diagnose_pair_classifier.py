@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
-from xgboost import XGBClassifier
+from xgboost import XGBClassifier, XGBRanker
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import accuracy_score, log_loss
 
@@ -274,11 +274,108 @@ def train_and_evaluate(load_start: str, dev_end: str, test_start: str, test_end:
     print(f"\n리포트 저장: {rc.path}")
 
 
+def _pick_accuracy(df: pd.DataFrame, score_col: str = "p_joint") -> float:
+    """경주별로 score_col이 가장 높은 행을 골라 label==1 비율을 낸다."""
+    best_idx = df.groupby("race_id")[score_col].idxmax()
+    return df.loc[best_idx]["label"].mean()
+
+
+def train_and_evaluate_ranker(load_start: str, dev_end: str, test_start: str, test_end: str):
+    df = _load_predictions_with_probs(load_start, test_end)
+    if df is None:
+        return
+
+    print("과거 평균 초반통과순위(leak-safe) 계산 중...")
+    avg_early_ord = fetch_avg_early_ord_asof(df)
+
+    pair_df = build_classifier_pair_table(df, avg_early_ord)
+    if pair_df.empty:
+        print("[오류] 페어를 생성할 수 있는 경주가 없습니다")
+        return
+    pair_df = add_race_relative_features(pair_df)
+    pair_df["race_date"] = pair_df["race_date"].astype(str)
+
+    with capture_report("pair_ranker") as rc:
+        dev_df = pair_df[pair_df["race_date"] <= dev_end].reset_index(drop=True)
+        test_df = pair_df[(pair_df["race_date"] >= test_start) & (pair_df["race_date"] <= test_end)].reset_index(drop=True)
+
+        print(f"\n{'='*70}")
+        print(f"  복연승 페어 랭커(rank:pairwise): dev<= {dev_end}, test {test_start}~{test_end}")
+        print(f"{'='*70}")
+        print(f"dev 페어 수: {len(dev_df)} ({dev_df['race_id'].nunique()}경주)")
+        print(f"test 페어 수: {len(test_df)} ({test_df['race_id'].nunique()}경주)")
+
+        if dev_df.empty or test_df.empty:
+            print("[오류] dev 또는 test 구간에 페어가 없습니다")
+            return
+
+        X_dev = dev_df[FEATURE_COLUMNS].astype(float)
+        y_dev = dev_df["label"].astype(int)
+        groups_dev = dev_df["race_id"]
+
+        ranker_params = dict(
+            n_estimators=200, max_depth=3, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8,
+            objective="rank:pairwise", random_state=42,
+        )
+
+        print("\nGroupKFold(5) 교차검증 중...")
+        gkf = GroupKFold(n_splits=5)
+        fold_pick_accs = []
+        for fold, (train_idx, val_idx) in enumerate(gkf.split(X_dev, y_dev, groups_dev), start=1):
+            train_fold = dev_df.iloc[train_idx].sort_values("race_id").reset_index(drop=True)
+            val_fold = dev_df.iloc[val_idx].sort_values("race_id").reset_index(drop=True)
+
+            model = XGBRanker(**ranker_params)
+            model.fit(
+                train_fold[FEATURE_COLUMNS].astype(float),
+                train_fold["label"].astype(int),
+                qid=train_fold["race_id"],
+            )
+            val_fold = val_fold.copy()
+            val_fold["p_joint"] = model.predict(val_fold[FEATURE_COLUMNS].astype(float))
+            acc = _pick_accuracy(val_fold)
+            fold_pick_accs.append(acc)
+            print(f"  fold {fold}: 최고픽 적중률={acc:.3f}")
+        print(f"  평균: 최고픽 적중률={np.mean(fold_pick_accs):.3f}")
+
+        print("\ndev 전체로 최종 모델 학습 중...")
+        dev_sorted = dev_df.sort_values("race_id").reset_index(drop=True)
+        final_model = XGBRanker(**ranker_params)
+        final_model.fit(
+            dev_sorted[FEATURE_COLUMNS].astype(float),
+            dev_sorted["label"].astype(int),
+            qid=dev_sorted["race_id"],
+        )
+
+        print("\n[피처 중요도]")
+        importances = sorted(zip(FEATURE_COLUMNS, final_model.feature_importances_),
+                              key=lambda x: -x[1])
+        for name, imp in importances:
+            print(f"  {name}: {imp:.4f}")
+
+        test_df = test_df.copy()
+        X_test = test_df[FEATURE_COLUMNS].astype(float)
+        test_df["p_joint"] = final_model.predict(X_test)
+
+        acc = _pick_accuracy(test_df)
+        n_races = test_df["race_id"].nunique()
+        print(f"\n[test 최고 페어 픽 적중률] {acc:.1%}  ({n_races}경주)")
+        print("  비교 기준: 1차(분류기) 38.5%, 2차(경주-상대 피처) 39.2%, "
+              "오프셋 로지스틱(스크리닝) 40.0%, 무작위 7.2%, Harville 36.5%")
+
+    print(f"\n리포트 저장: {rc.path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="복연승 페어 분류기(XGBoost) 학습·평가")
     parser.add_argument("--load-start", default=LOAD_START_DEFAULT)
     parser.add_argument("--dev-end", default=DEV_END_DEFAULT)
     parser.add_argument("--test-start", default=TEST_START_DEFAULT)
     parser.add_argument("--test-end", default=TEST_END_DEFAULT)
+    parser.add_argument("--model", choices=["classifier", "ranker"], default="classifier")
     args = parser.parse_args()
-    train_and_evaluate(args.load_start, args.dev_end, args.test_start, args.test_end)
+    if args.model == "ranker":
+        train_and_evaluate_ranker(args.load_start, args.dev_end, args.test_start, args.test_end)
+    else:
+        train_and_evaluate(args.load_start, args.dev_end, args.test_start, args.test_end)
