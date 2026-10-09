@@ -330,7 +330,7 @@ def train_and_evaluate_ranker(load_start: str, dev_end: str, test_start: str, te
             model.fit(
                 train_fold[FEATURE_COLUMNS].astype(float),
                 train_fold["label"].astype(int),
-                qid=train_fold["race_id"],
+                qid=pd.factorize(train_fold["race_id"])[0],
             )
             val_fold = val_fold.copy()
             val_fold["p_joint"] = model.predict(val_fold[FEATURE_COLUMNS].astype(float))
@@ -345,7 +345,7 @@ def train_and_evaluate_ranker(load_start: str, dev_end: str, test_start: str, te
         final_model.fit(
             dev_sorted[FEATURE_COLUMNS].astype(float),
             dev_sorted["label"].astype(int),
-            qid=dev_sorted["race_id"],
+            qid=pd.factorize(dev_sorted["race_id"])[0],
         )
 
         print("\n[피처 중요도]")
