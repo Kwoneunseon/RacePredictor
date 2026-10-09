@@ -170,5 +170,91 @@ def build_classifier_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
     return pd.DataFrame(rows)
 
 
+def train_and_evaluate(load_start: str, dev_end: str, test_start: str, test_end: str):
+    df = _load_predictions_with_probs(load_start, test_end)
+    if df is None:
+        return
+
+    print("과거 평균 초반통과순위(leak-safe) 계산 중...")
+    avg_early_ord = fetch_avg_early_ord_asof(df)
+
+    pair_df = build_classifier_pair_table(df, avg_early_ord)
+    if pair_df.empty:
+        print("[오류] 페어를 생성할 수 있는 경주가 없습니다")
+        return
+    pair_df["race_date"] = pair_df["race_date"].astype(str)
+
+    with capture_report("pair_classifier") as rc:
+        dev_df = pair_df[pair_df["race_date"] <= dev_end].reset_index(drop=True)
+        test_df = pair_df[(pair_df["race_date"] >= test_start) & (pair_df["race_date"] <= test_end)].reset_index(drop=True)
+
+        print(f"\n{'='*70}")
+        print(f"  복연승 페어 분류기: dev<= {dev_end}, test {test_start}~{test_end}")
+        print(f"{'='*70}")
+        print(f"dev 페어 수: {len(dev_df)} ({dev_df['race_id'].nunique()}경주)")
+        print(f"test 페어 수: {len(test_df)} ({test_df['race_id'].nunique()}경주)")
+
+        if dev_df.empty or test_df.empty:
+            print("[오류] dev 또는 test 구간에 페어가 없습니다")
+            return
+
+        X_dev = dev_df[FEATURE_COLUMNS].astype(float)
+        y_dev = dev_df["label"].astype(int)
+        groups_dev = dev_df["race_id"]
+
+        print("\nGroupKFold(5) 교차검증 중...")
+        gkf = GroupKFold(n_splits=5)
+        fold_accs = []
+        fold_loglosses = []
+        for fold, (train_idx, val_idx) in enumerate(gkf.split(X_dev, y_dev, groups_dev), start=1):
+            model = XGBClassifier(
+                n_estimators=200, max_depth=3, learning_rate=0.05,
+                subsample=0.8, colsample_bytree=0.8,
+                eval_metric="logloss", random_state=42,
+            )
+            model.fit(X_dev.iloc[train_idx], y_dev.iloc[train_idx])
+            val_probs = model.predict_proba(X_dev.iloc[val_idx])[:, 1]
+            val_preds = (val_probs >= 0.5).astype(int)
+            acc = accuracy_score(y_dev.iloc[val_idx], val_preds)
+            ll = log_loss(y_dev.iloc[val_idx], val_probs, labels=[0, 1])
+            fold_accs.append(acc)
+            fold_loglosses.append(ll)
+            print(f"  fold {fold}: 정확도={acc:.3f}  로그손실={ll:.3f}")
+        print(f"  평균: 정확도={np.mean(fold_accs):.3f}  로그손실={np.mean(fold_loglosses):.3f}")
+
+        print("\ndev 전체로 최종 모델 학습 중...")
+        final_model = XGBClassifier(
+            n_estimators=200, max_depth=3, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8,
+            eval_metric="logloss", random_state=42,
+        )
+        final_model.fit(X_dev, y_dev)
+
+        print("\n[피처 중요도]")
+        importances = sorted(zip(FEATURE_COLUMNS, final_model.feature_importances_),
+                              key=lambda x: -x[1])
+        for name, imp in importances:
+            print(f"  {name}: {imp:.4f}")
+
+        X_test = test_df[FEATURE_COLUMNS].astype(float)
+        test_df = test_df.copy()
+        test_df["p_joint"] = final_model.predict_proba(X_test)[:, 1]
+
+        best_idx = test_df.groupby("race_id")["p_joint"].idxmax()
+        best = test_df.loc[best_idx]
+        acc = best["label"].mean()
+        print(f"\n[test 최고 페어 픽 적중률] {acc:.1%}  ({len(best)}경주)")
+        print("  비교 기준(같은 창은 아닐 수 있음): 무작위 7.2%, 기존 휴리스틱 38.5%, "
+              "Harville 36.5%, 오프셋 로지스틱(스크리닝) 40.0%")
+
+    print(f"\n리포트 저장: {rc.path}")
+
+
 if __name__ == "__main__":
-    pass
+    parser = argparse.ArgumentParser(description="복연승 페어 분류기(XGBoost) 학습·평가")
+    parser.add_argument("--load-start", default=LOAD_START_DEFAULT)
+    parser.add_argument("--dev-end", default=DEV_END_DEFAULT)
+    parser.add_argument("--test-start", default=TEST_START_DEFAULT)
+    parser.add_argument("--test-end", default=TEST_END_DEFAULT)
+    args = parser.parse_args()
+    train_and_evaluate(args.load_start, args.dev_end, args.test_start, args.test_end)
