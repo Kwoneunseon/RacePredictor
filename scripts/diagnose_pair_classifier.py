@@ -205,6 +205,7 @@ def train_and_evaluate(load_start: str, dev_end: str, test_start: str, test_end:
     if pair_df.empty:
         print("[오류] 페어를 생성할 수 있는 경주가 없습니다")
         return
+    pair_df = add_race_relative_features(pair_df)
     pair_df["race_date"] = pair_df["race_date"].astype(str)
 
     with capture_report("pair_classifier") as rc:
