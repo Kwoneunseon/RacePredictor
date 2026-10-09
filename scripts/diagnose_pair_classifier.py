@@ -42,6 +42,7 @@ FEATURE_COLUMNS = [
     "win_prob_i", "win_prob_j", "top3_prob_i", "top3_prob_j",
     "p_indep", "win_prob_diff", "win_prob_ratio",
     "both_early_leader", "entry_gap", "pace_pressure",
+    "p_indep_rank_in_race", "p_indep_ratio_to_max", "n_pairs_in_race",
 ]
 
 
@@ -168,6 +169,28 @@ def build_classifier_pair_table(df: pd.DataFrame, avg_early_ord: pd.Series,
                     "label": int(ra["final_rank"] <= 3 and rb["final_rank"] <= 3),
                 })
     return pd.DataFrame(rows)
+
+
+def add_race_relative_features(pair_df: pd.DataFrame) -> pd.DataFrame:
+    """build_classifier_pair_table의 출력에 경주-상대 피처 3개를 덧붙인다.
+
+    p_indep_rank_in_race: 그 경주에서 이 페어의 p_indep 순위(1=최댓값).
+    동률은 평균 순위(method="average")로 처리한다.
+    p_indep_ratio_to_max: 이 페어의 p_indep ÷ 그 경주 p_indep 최댓값
+    (0 나누기는 분모를 1e-6으로 바닥 처리해 방지, 0~1 범위, 그 경주의
+    1등 페어는 정확히 1.0).
+    n_pairs_in_race: 그 경주에 속한 페어의 총 개수.
+
+    pair_df는 build_classifier_pair_table의 반환 형식(race_id, p_indep
+    컬럼 포함)이어야 한다. 원본을 변경하지 않고 새 DataFrame을 반환한다.
+    """
+    pair_df = pair_df.copy()
+    g = pair_df.groupby("race_id")["p_indep"]
+    pair_df["p_indep_rank_in_race"] = g.rank(ascending=False, method="average")
+    race_max = g.transform("max")
+    pair_df["p_indep_ratio_to_max"] = pair_df["p_indep"] / race_max.clip(lower=1e-6)
+    pair_df["n_pairs_in_race"] = pair_df.groupby("race_id")["race_id"].transform("size")
+    return pair_df
 
 
 def train_and_evaluate(load_start: str, dev_end: str, test_start: str, test_end: str):

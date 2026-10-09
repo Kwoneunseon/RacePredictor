@@ -114,3 +114,73 @@ def test_build_classifier_pair_table_win_prob_ratio_handles_zero_win_prob():
     row = pairs[(pairs.entry_i == 1) & (pairs.entry_j == 2)].iloc[0]
     assert row["win_prob_ratio"] == pytest.approx(0.0)
     assert np.isfinite(row["win_prob_ratio"])
+
+
+from scripts.diagnose_pair_classifier import add_race_relative_features
+
+
+def _make_race_relative_df():
+    """R1: 3개 페어, p_indep이 전부 다름(0.5, 0.5, 0.2 중 둘이 동일 -> 동률
+    케이스 포함). R2: 2개 페어, p_indep 전부 다름."""
+    return pd.DataFrame({
+        "race_id":  ["R1", "R1", "R1", "R2", "R2"],
+        "entry_i":  [1, 1, 2, 1, 1],
+        "entry_j":  [2, 3, 3, 2, 3],
+        "p_indep":  [0.5, 0.5, 0.2, 0.6, 0.3],
+    })
+
+
+def test_add_race_relative_features_rank_highest_p_indep_is_1():
+    df = _make_race_relative_df()
+    result = add_race_relative_features(df)
+    row = result[(result.race_id == "R2") & (result.entry_j == 2)].iloc[0]
+    assert row["p_indep_rank_in_race"] == pytest.approx(1.0)
+
+
+def test_add_race_relative_features_tied_p_indep_gets_average_rank():
+    df = _make_race_relative_df()
+    result = add_race_relative_features(df)
+    r1 = result[result.race_id == "R1"]
+    tied_rows = r1[r1["p_indep"] == 0.5]
+    assert len(tied_rows) == 2
+    assert tied_rows["p_indep_rank_in_race"].tolist() == pytest.approx([1.5, 1.5])
+    lowest = r1[r1["p_indep"] == 0.2].iloc[0]
+    assert lowest["p_indep_rank_in_race"] == pytest.approx(3.0)
+
+
+def test_add_race_relative_features_ratio_to_max_is_one_for_top_pair():
+    df = _make_race_relative_df()
+    result = add_race_relative_features(df)
+    r2 = result[result.race_id == "R2"]
+    top = r2[r2["p_indep"] == 0.6].iloc[0]
+    assert top["p_indep_ratio_to_max"] == pytest.approx(1.0)
+    other = r2[r2["p_indep"] == 0.3].iloc[0]
+    assert other["p_indep_ratio_to_max"] == pytest.approx(0.5)
+    assert 0.0 <= other["p_indep_ratio_to_max"] <= 1.0
+
+
+def test_add_race_relative_features_n_pairs_in_race_matches_group_size():
+    df = _make_race_relative_df()
+    result = add_race_relative_features(df)
+    assert (result[result.race_id == "R1"]["n_pairs_in_race"] == 3).all()
+    assert (result[result.race_id == "R2"]["n_pairs_in_race"] == 2).all()
+
+
+def test_add_race_relative_features_races_do_not_mix():
+    df = _make_race_relative_df()
+    result = add_race_relative_features(df)
+    # R2는 페어가 2개뿐이지만 R1(3개)의 n_pairs_in_race에 영향을 주지 않는다
+    assert (result[result.race_id == "R1"]["n_pairs_in_race"] != 2).all()
+    # R1 순위가 R2 p_indep 값(0.6, 0.3)에 의해 바뀌지 않는다
+    r1_ranks = sorted(result[result.race_id == "R1"]["p_indep_rank_in_race"].tolist())
+    assert r1_ranks == [1.5, 1.5, 3.0]
+
+
+def test_add_race_relative_features_order_independent():
+    df = _make_race_relative_df()
+    shuffled = df.sample(frac=1.0, random_state=7).reset_index(drop=True)
+    result = add_race_relative_features(shuffled)
+    r2 = result[result.race_id == "R2"]
+    top = r2[r2["p_indep"] == 0.6].iloc[0]
+    assert top["p_indep_rank_in_race"] == pytest.approx(1.0)
+    assert top["p_indep_ratio_to_max"] == pytest.approx(1.0)
