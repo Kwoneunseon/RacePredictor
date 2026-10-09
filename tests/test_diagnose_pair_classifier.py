@@ -95,3 +95,22 @@ def test_build_classifier_pair_table_entry_gap_is_absolute_difference():
     pairs = build_classifier_pair_table(df, avg_early_ord)
     row = pairs[(pairs.race_id == "R1") & (pairs.entry_i == 1) & (pairs.entry_j == 4)].iloc[0]
     assert row["entry_gap"] == pytest.approx(3.0)
+
+
+def test_build_classifier_pair_table_win_prob_ratio_handles_zero_win_prob():
+    # lo/hi는 lo<=hi이므로 hi(분모)가 0이 되는 경우는 두 말의 win_prob가
+    # 모두 0일 때뿐이다. entry 1,2가 그 경우이고, entry 3은 유효 말 3두
+    # 조건(페어 생성 최소 조건)을 채우기 위해 넣는다.
+    df = pd.DataFrame({
+        "race_id":      ["R5"] * 3,
+        "race_date":    ["2026-01-05"] * 3,
+        "entry_number": [1, 2, 3],
+        "win_prob":     [0.0, 0.0, 0.2],
+        "top3_prob":    [0.5, 0.4, 0.3],
+        "final_rank":   [1, 2, 3],
+    })
+    avg_early_ord = pd.Series([1.0, 1.0, 1.0], index=df.index)
+    pairs = build_classifier_pair_table(df, avg_early_ord)
+    row = pairs[(pairs.entry_i == 1) & (pairs.entry_j == 2)].iloc[0]
+    assert row["win_prob_ratio"] == pytest.approx(0.0)
+    assert np.isfinite(row["win_prob_ratio"])
