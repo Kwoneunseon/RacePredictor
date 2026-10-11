@@ -6,10 +6,18 @@ from config import (
     EV_THRESHOLD_FALLBACK,
 )
 
+# race_payouts.bet_type(영문 snake_case: win/place/quinella/exacta/
+# quinella_place/trio/trifecta)과 어휘를 통일한 정식 값. betting_records.bet_type
+# 저장 및 이 모듈의 판단 로직은 항상 이 값을 쓰고, 사용자向 한글 표시가 필요한
+# 화면(main.py 콘솔 출력, core/prediction_report.py HTML)에서만 이 매핑으로
+# 변환한다. (2026-07-30, quant-model-expert: race_payouts와의 조인/백테스트를
+# 위해 한글 표기를 폐기하고 영문으로 표준화)
+BET_TYPE_LABELS_KO = {"win": "단승", "place": "연승"}
+
 
 @dataclass
 class BetRecommendation:
-    bet_type: str   # "단승" | "연승"
+    bet_type: str   # "win" | "place" (race_payouts.bet_type과 동일 어휘)
     amount: int     # 원, 100원 단위
     ev: float
     kelly_f: float
@@ -49,7 +57,7 @@ class EVCalculator:
             return None
 
         amount = self.bet_size(bankroll, kelly_f)
-        bet_type = "단승" if model_prob >= 0.30 else "연승"
+        bet_type = "win" if model_prob >= 0.30 else "place"
 
         return BetRecommendation(
             bet_type=bet_type,

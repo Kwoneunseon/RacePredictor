@@ -47,11 +47,30 @@ def test_render_html_shows_candidate_when_no_realtime_odds():
 def test_render_html_shows_ev_decision():
     html = prediction_report.render_html(_payload(decisions=[{
         "label": "[제주 2경주]", "horse_no": "7", "horse_name": "말이름",
-        "bet_type": "단승", "amount": 5000, "ev": 0.35, "model_prob": 0.42,
+        "bet_type": "win", "amount": 5000, "ev": 0.35, "model_prob": 0.42,
         "odds": 3.1, "source": "scraping",
     }]))
     assert "말이름" in html
     assert "5,000" in html
+
+
+def test_render_html_translates_bet_type_to_korean_label():
+    """betting_records/race_payouts와 어휘를 통일한 영문 bet_type("win"/"place")을
+    사용자 화면에서는 한글 라벨("단승"/"연승")로 표시해야 한다."""
+    html = prediction_report.render_html(_payload(decisions=[{
+        "label": "[제주 2경주]", "horse_no": "7", "horse_name": "말이름",
+        "bet_type": "win", "amount": 5000, "ev": 0.35, "model_prob": 0.42,
+        "odds": 3.1, "source": "scraping",
+    }]))
+    assert "단승" in html
+    assert "win" not in html
+
+    html_place = prediction_report.render_html(_payload(decisions=[{
+        "label": "[제주 2경주]", "horse_no": "7", "horse_name": "말이름",
+        "bet_type": "place", "amount": 5000, "ev": 0.35, "model_prob": 0.42,
+        "odds": 3.1, "source": "scraping",
+    }]))
+    assert "연승" in html_place
 
 
 def test_render_html_shows_race_rows():

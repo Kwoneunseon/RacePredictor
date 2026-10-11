@@ -47,7 +47,7 @@ class Investor:
                 if ev <= EV_THRESHOLD_FALLBACK:
                     logger.debug(f"{race_id}: 폴백 EV {ev:.3f} <= {EV_THRESHOLD_FALLBACK}, 스킵")
                     continue
-                bet_type = "단승" if model_prob >= 0.35 else "연승"
+                bet_type = "win" if model_prob >= 0.35 else "place"  # race_payouts.bet_type과 어휘 통일
                 amount = max(int(self.bankroll * MAX_BET_FRACTION * model_prob // 100) * 100, 100)
                 decisions.append({
                     "race_id": race_id,

@@ -8,6 +8,7 @@ from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.predictor import RacePredictor
 from core.model_manager import ModelManager
+from core.ev_calculator import BET_TYPE_LABELS_KO
 
 logger = get_logger(__name__)
 
@@ -359,8 +360,9 @@ def cmd_predict(args):
         print(f"베팅 추천: {len(decisions)}경주")
         for d in decisions:
             label = race_label(d["race_id"])
+            bet_type_label = BET_TYPE_LABELS_KO.get(d["bet_type"], d["bet_type"])
             print(
-                f"  {label} → {horse_no_str(d.get('horse_no'))}번 {d['horse_name']} | {d['bet_type']} {d['amount']:,}원 "
+                f"  {label} → {horse_no_str(d.get('horse_no'))}번 {d['horse_name']} | {bet_type_label} {d['amount']:,}원 "
                 f"(EV={d['ev']:+.2f}, 확률={d['model_prob']:.3f}, 배당={d['odds']:.1f}배, 출처={d['source']})"
             )
             report_decisions.append({

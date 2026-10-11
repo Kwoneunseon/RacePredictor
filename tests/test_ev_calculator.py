@@ -56,7 +56,7 @@ def test_recommend_returns_bet_above_threshold():
     assert result is not None
     assert isinstance(result, BetRecommendation)
     assert result.ev > 0.10
-    assert result.bet_type in ("단승", "연승")
+    assert result.bet_type in ("win", "place")
     assert result.amount >= 100
 
 
@@ -73,11 +73,11 @@ def test_single_bet_type_for_high_prob():
     calc = EVCalculator()
     result = calc.recommend(model_prob=0.40, odds=6.0, bankroll=100_000, source="scraping")
     assert result is not None
-    assert result.bet_type == "단승"
+    assert result.bet_type == "win"
 
 
-def test_yeonseung_bet_type_for_medium_prob():
+def test_place_bet_type_for_medium_prob():
     calc = EVCalculator()
     result = calc.recommend(model_prob=0.22, odds=8.0, bankroll=100_000, source="scraping")
     assert result is not None
-    assert result.bet_type == "연승"
+    assert result.bet_type == "place"

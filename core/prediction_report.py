@@ -1,6 +1,8 @@
 """예측 결과 HTML 리포트 생성. cmd_predict가 계산을 마친 결과 데이터를 받아 렌더링만 담당한다."""
 from pathlib import Path
 
+from core.ev_calculator import BET_TYPE_LABELS_KO
+
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports"
 
 
@@ -83,7 +85,7 @@ def render_html(payload: dict) -> str:
     if decisions:
         dec_html = "".join(f"""
         <div class="pick-row">
-          <div class="pick-main">{d['label']} → <strong>{d['horse_no']}번 {d['horse_name']}</strong> · {d['bet_type']} {_fmt_amount(d['amount'])}원</div>
+          <div class="pick-main">{d['label']} → <strong>{d['horse_no']}번 {d['horse_name']}</strong> · {BET_TYPE_LABELS_KO.get(d['bet_type'], d['bet_type'])} {_fmt_amount(d['amount'])}원</div>
           <div class="pick-sub">EV={d['ev']:+.2f} · 확률={d['model_prob']:.3f} · 배당={d['odds']:.1f}배 · 출처={d['source']}</div>
         </div>""" for d in decisions)
     else:
