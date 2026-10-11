@@ -5,6 +5,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from library import collecting_race_results
+from core.history_rebuilder import rebuild_after_collect
 from Utils.database import get_client
 from Utils.logger import get_logger
 
@@ -56,12 +57,13 @@ def collect_task():
         pass
 
     try:
-        collecting_race_results(
+        first_date = collecting_race_results(
             start_page=1,
             max_pages=50,
             start_date=today,
             end_date=today,
         )
+        rebuild_after_collect(first_date)
 
         # 마체중 스크래핑 (horse_weight=0인 항목 보완)
         from library.scraper_weights import update_weights_to_db

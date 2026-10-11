@@ -101,3 +101,36 @@ def test_load_all_entries_filters_valid_rank_range_in_query():
 
     q.gt.assert_called_once_with("final_rank", 0)
     q.gt.return_value.lt.assert_called_once_with("final_rank", NON_FINISH_RANK_MIN)
+
+
+# ── 수집 후 자동 재계산 ───────────────────────────────────────────────────────
+
+def test_rebuild_raises_when_upsert_batch_fails(mocker):
+    from core import history_rebuilder as hr
+    mocker.patch.object(hr, "get_client")
+    mocker.patch.object(hr, "load_all_entries", return_value=pd.DataFrame([
+        {"horse_id": "A", "race_date": "2026-01-01", "final_rank": 1, "horse_weight": 470},
+    ]))
+    mocker.patch.object(hr, "upsert", return_value=False)
+    with pytest.raises(RuntimeError):
+        hr.rebuild("2026-01-01")
+
+
+def test_rebuild_after_collect_starts_from_first_date_without_end(mocker):
+    from core import history_rebuilder as hr
+    mock_rebuild = mocker.patch.object(hr, "rebuild")
+    hr.rebuild_after_collect("2026-10-01")
+    mock_rebuild.assert_called_once_with(start_date="2026-10-01")
+
+
+def test_rebuild_after_collect_skips_when_nothing_collected(mocker):
+    from core import history_rebuilder as hr
+    mock_rebuild = mocker.patch.object(hr, "rebuild")
+    hr.rebuild_after_collect(None)
+    mock_rebuild.assert_not_called()
+
+
+def test_rebuild_after_collect_does_not_raise_on_failure(mocker):
+    from core import history_rebuilder as hr
+    mocker.patch.object(hr, "rebuild", side_effect=RuntimeError("boom"))
+    hr.rebuild_after_collect("2026-10-01")

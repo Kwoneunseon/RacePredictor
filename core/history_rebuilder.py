@@ -106,6 +106,7 @@ def rebuild(start_date: str = None, end_date: str = None) -> None:
 
     rows = hist_df.to_dict("records")
     total = 0
+    failed = 0
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         ok = upsert("horse_race_history", batch, on_conflict="horse_id,as_of_date")
@@ -113,9 +114,22 @@ def rebuild(start_date: str = None, end_date: str = None) -> None:
             total += len(batch)
             logger.info(f"  upsert {total}/{len(rows)}건 완료")
         else:
+            failed += len(batch)
             logger.error(f"  배치 {i} upsert 실패")
 
     logger.info(f"horse_race_history 업데이트 완료: 총 {total}건")
+    if failed:
+        raise RuntimeError(f"horse_race_history upsert 실패: {failed}/{len(rows)}건")
+
+
+def rebuild_after_collect(first_date) -> None:
+    """수집 직후 호출. 과거 결과가 들어오면 이후 누적값이 전부 바뀌므로 end 없이 다시 계산한다."""
+    if not first_date:
+        return
+    try:
+        rebuild(start_date=first_date)
+    except Exception as e:
+        logger.error(f"horse_race_history 재계산 실패 ({first_date}~): {e}")
 
 
 if __name__ == "__main__":
