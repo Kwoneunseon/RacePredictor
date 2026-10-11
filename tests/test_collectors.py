@@ -85,6 +85,32 @@ def test_dedup_keeps_first_win_odds_when_already_present():
     assert entries[0]["win_odds"] == 2.5
 
 
+def test_parse_keeps_finish_time_from_rc_time():
+    from library.collector_races import parse_and_normalize_race_data
+    item = {"rcDate": 20260606, "meet": "서울", "rcNo": 1, "hrNo": "0047063", "hrName": "말",
+            "jkNo": "080001", "trNo": "070001", "owNo": "010001", "chulNo": 3, "ord": 1,
+            "rcTime": 86.5}
+    parsed = parse_and_normalize_race_data({"response": {"body": {"items": {"item": [item]}}}})
+    assert parsed["race_entries"][0]["finish_time"] == 86.5
+
+
+def test_split_by_finish_time_drops_key_from_untimed_rows():
+    """기록이 빈 행은 finish_time 키 없이 저장해야 기존 기록을 0으로 덮지 않는다."""
+    from library.collector_races import split_by_finish_time
+    timed = {"race_id": "r", "horse_id": "a", "finish_time": 86.5}
+    untimed = {"race_id": "r", "horse_id": "b", "finish_time": 0.0}
+
+    parts = split_by_finish_time([timed, untimed])
+
+    assert parts == [[timed], [{"race_id": "r", "horse_id": "b"}]]
+
+
+def test_split_by_finish_time_skips_empty_parts():
+    from library.collector_races import split_by_finish_time
+    timed = {"race_id": "r", "horse_id": "a", "finish_time": 86.5}
+    assert split_by_finish_time([timed]) == [[timed]]
+
+
 def _captured_request(mocker, **kwargs):
     from library import collector_races
     send = mocker.patch("requests.Session.send")

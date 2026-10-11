@@ -538,6 +538,14 @@ def filter_duplicates_in_race_and_entries(races, race_entries):
     return filtered_races, filtered_entries
 
 
+def split_by_finish_time(race_entries):
+    """기록 있는 행과 없는 행을 나눈다. 없는 행은 finish_time 키를 빼서 upsert가 기존 기록을 0으로 덮지 않게 한다."""
+    timed = [e for e in race_entries if e.get('finish_time')]
+    untimed = [{k: v for k, v in e.items() if k != 'finish_time'}
+               for e in race_entries if not e.get('finish_time')]
+    return [part for part in (timed, untimed) if part]
+
+
 def filter_duplicates_in_payouts(race_payouts):
     """race_payouts 리스트 내 중복 제거 (race_id, bet_type, entry_numbers 기준).
 
@@ -631,7 +639,9 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
             continue
 
         logger.info(f"{table_name} 저장 시작: {len(records)}개")
-        saved_counts[table_name] = save_table_data(table_name, records, batch_size)
+        # 한 배치의 행은 키가 같아야 해서 나눠 저장한다
+        parts = split_by_finish_time(records) if table_name == 'race_entries' else [records]
+        saved_counts[table_name] = sum(save_table_data(table_name, part, batch_size) for part in parts)
         time.sleep(0.2)  # API 제한 방지
 
     # 마스터 데이터 카운트도 포함

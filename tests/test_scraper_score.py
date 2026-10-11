@@ -375,6 +375,22 @@ def test_update_final_ranks_works_for_jeju_meet_code():
     assert result == 2
 
 
+def test_update_final_ranks_also_updates_finish_time():
+    api_resp = _make_jeju_api_response([
+        {"race_date": "20260710", "race_no": 1, "horse_id": "H1", "final_rank": 1, "win_odds": 4.5},
+    ])
+
+    mock_client = MagicMock()
+    mock_update = mock_client.table.return_value.update
+
+    with patch("library.collector_races.fetch_race_data_all", return_value=(api_resp, 1)), \
+         patch("Utils.database.get_client", return_value=mock_client):
+        from library.scraper_score import update_final_ranks
+        update_final_ranks("2026-07-10", meet_code=2)
+
+    assert mock_update.call_args[0][0]["finish_time"] == 86.5
+
+
 def test_update_final_ranks_filters_out_other_dates_in_monthly_response():
     """제주·부산 API는 월 단위 응답이므로, 요청한 날짜가 아닌 기록은 업데이트에서 제외돼야 한다."""
     api_resp = _make_jeju_api_response([

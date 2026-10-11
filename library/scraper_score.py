@@ -315,6 +315,8 @@ def update_final_ranks(race_date: str, meet_code: int) -> int:
         update_data: dict = {"final_rank": entry["final_rank"]}
         if entry.get("win_odds"):
             update_data["win_odds"] = entry["win_odds"]
+        if entry.get("finish_time"):
+            update_data["finish_time"] = entry["finish_time"]
         try:
             res = (
                 client.table("race_entries")
