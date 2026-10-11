@@ -157,8 +157,10 @@ class RacePreprocessor:
                 wins = grp["_is_win"].values
                 vals = []
                 for i in range(len(wins)):
-                    cutoff = dates[i] - np.timedelta64(30, "D")
-                    past = wins[:i][dates[:i] >= cutoff]
+                    current_date = dates[i]
+                    cutoff = current_date - np.timedelta64(30, "D")
+                    mask = (dates < current_date) & (dates >= cutoff)
+                    past = wins[mask]
                     vals.append(float(past.mean()) if len(past) > 0 else 0.0)
                 rates[grp.index] = vals
             return rates

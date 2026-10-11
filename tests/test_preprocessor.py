@@ -205,6 +205,35 @@ def test_preprocessor_rolling_recent_win_rate():
     assert r3["jockey_recent_win_rate"] == pytest.approx(0.0)
 
 
+def test_preprocessor_rolling_recent_win_rate_excludes_same_day_races():
+    """같은 날 여러 경주가 있어도, 그날의 다른 경주는 '과거'로 치지 않는다
+    (날짜 기준 비교 - 행 위치 기준으로 자르면 같은 날 먼저 정렬된 경주의
+    승패가 섞여 들어간다)."""
+    df = pd.DataFrame({
+        "horse_id": ["H1", "H2", "H3"],
+        "race_id": ["R1", "R2", "R3"],
+        "race_date": ["2025-01-05", "2025-01-05", "2025-01-05"],
+        "final_rank": [1, 2, 1],
+        "horse_age": [4, 4, 4],
+        "gender": ["수", "수", "수"],
+        "horse_class": ["국5", "국5", "국5"],
+        "race_distance": [1200, 1200, 1200],
+        "total_horses": [8, 8, 8],
+        "horse_weight": [480, 480, 480],
+        "race_grade": ["일반", "일반", "일반"],
+        "track_condition": ["양호", "양호", "양호"],
+        "weather": ["맑음", "맑음", "맑음"],
+        "win_odds": [5.0, 5.0, 5.0],
+        "jk_no": ["J1", "J1", "J1"],
+        "trainer_id": ["T1", "T1", "T1"],
+    })
+    p = RacePreprocessor()
+    result = p.fit_transform(df)
+    # 전부 같은 날짜라 어느 경주도 같은 날의 다른 경주를 과거로 쓸 수 없다 -> 전부 0.0
+    assert (result["jockey_recent_win_rate"] == 0.0).all()
+    assert (result["trainer_recent_win_rate"] == 0.0).all()
+
+
 def test_preprocessor_rolling_missing_columns(sample_df):
     """jk_no 없으면 jockey_recent_win_rate는 0으로 채워짐."""
     p = RacePreprocessor()
