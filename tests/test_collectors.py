@@ -56,3 +56,61 @@ def test_save_trainer_batch_empty_returns_zero():
     from library.collector_trainers import save_to_supabase_batch
     result = save_to_supabase_batch([])
     assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# collector_races: 서울 win_odds 병합 / 공용 API(API4_3) 호출
+# ---------------------------------------------------------------------------
+
+def _entry(win_odds, race_id="2026-06-06_서울_1", horse_id="0053568"):
+    return {"race_id": race_id, "horse_id": horse_id, "final_rank": 6, "win_odds": win_odds}
+
+
+def test_dedup_fills_missing_win_odds_from_duplicate_entry():
+    """SeoulRace_1 행(win_odds 0)이 먼저 와도 API4_3 행의 배당이 버려지면 안 된다."""
+    from library.collector_races import filter_duplicates_in_race_and_entries
+
+    _, entries = filter_duplicates_in_race_and_entries([], [_entry(0.0), _entry(19.0)])
+
+    assert len(entries) == 1
+    assert entries[0]["win_odds"] == 19.0
+
+
+def test_dedup_keeps_first_win_odds_when_already_present():
+    from library.collector_races import filter_duplicates_in_race_and_entries
+
+    _, entries = filter_duplicates_in_race_and_entries([], [_entry(2.5), _entry(19.0)])
+
+    assert len(entries) == 1
+    assert entries[0]["win_odds"] == 2.5
+
+
+def _captured_request(mocker, **kwargs):
+    from library import collector_races
+    send = mocker.patch("requests.Session.send")
+    send.return_value.status_code = 200
+    send.return_value.json.return_value = {}
+    collector_races.fetch_race_data_all(**kwargs)
+    return send.call_args[0][0].url
+
+
+def test_fetch_jeju_uses_common_api_with_meet_param(mocker):
+    """제주 전용 API4_2는 폐기됨 -> 공용 API4_3에 meet=2로 조회해야 한다."""
+    url = _captured_request(mocker, meet_code=2, end_date="202606")
+    assert "API4_3/raceResult_3" in url
+    assert "meet=2" in url
+    assert "rc_month=202606" in url
+
+
+def test_fetch_seoul_default_uses_seoul_api(mocker):
+    url = _captured_request(mocker, meet_code=1, end_date="202606")
+    assert "SeoulRace_1" in url
+
+
+def test_fetch_seoul_common_api_queries_single_day(mocker):
+    """common_api=True면 서울도 API4_3(말별 winOdds 있음), 8자리 날짜는 rc_date로."""
+    url = _captured_request(mocker, meet_code=1, end_date="20260606", common_api=True)
+    assert "API4_3/raceResult_3" in url
+    assert "meet=1" in url
+    assert "rc_date=20260606" in url
+    assert "rc_month" not in url

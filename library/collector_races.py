@@ -15,17 +15,28 @@ from .collector_trainers import fetch_single_trainer_data as trainer_fetch_page,
 logger = get_logger(__name__)
 
 MEET_CODE_MAP = {'서울': 1, '제주': 2, '부산': 3, '부산경남': 3}
-TABLES_WITHOUT_UPDATED_AT = {'races', 'race_entries'}
+TABLES_WITHOUT_UPDATED_AT = {'races', 'race_entries', 'race_payouts'}
 TABLE_ON_CONFLICT = {
     'races': 'race_id',
     'race_entries': 'race_id,horse_id',
+    'race_payouts': 'race_id,bet_type,entry_numbers',
 }
 
-# 경마장별 전용 API 엔드포인트
+# plcOdds(연승 확정 배당)를 파싱하는 경마장. 말 개별 plcOdds 필드는 공용
+# API(raceResult_3) 응답에만 있다. 서울 전용 SeoulRace_1 응답에는 없으므로
+# (경주 단위 집계값 rcP1~8Odd뿐) 서울 연승 배당은 common_api=True로 받은
+# 행에서만 나온다. 서울 값은 2026-10-11 ScoreInfo.do 확정 배당과 대조 검증.
+PLC_ODDS_SUPPORTED_MEET_CODES = {1, 2, 3}
+
+# 3개 경마장 공용 경주 결과 API - meet 파라미터로 경마장을 지정한다(생략하면
+# 3곳이 섞여 온다). 말 개별 winOdds/plcOdds가 있는 유일한 소스.
+COMMON_RACE_ENDPOINT = "http://apis.data.go.kr/B551015/API4_3/raceResult_3"
+
+# 경마장별 API 엔드포인트. 제주 전용 API4_2/raceResult_2는 폐기됨(code 12).
 MEET_RACE_ENDPOINTS = {
-    1: "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",   # 서울
-    2: "https://apis.data.go.kr/B551015/API4_2/raceResult_2",    # 제주
-    3: "http://apis.data.go.kr/B551015/API4_3/raceResult_3",     # 부산경남
+    1: "https://apis.data.go.kr/B551015/API186_1/SeoulRace_1",   # 서울 (winOdds 없음)
+    2: COMMON_RACE_ENDPOINT,                                      # 제주
+    3: COMMON_RACE_ENDPOINT,                                      # 부산경남
 }
 
 # HTTP 요청 로그 숨기기
@@ -67,16 +78,20 @@ def fetch_race_data(page=1, per_page=1000 ,start_date=None, end_date=None):
         logger.error(f"API 호출 중 오류 발생 - 페이지 {page}: {str(e)}")
         return None, page
 
-def fetch_race_data_all(page=1, per_page=1000, meet_code=2, start_date=None, end_date=None):
-    """경마장별 전용 엔드포인트로 경주 결과를 가져오는 함수.
+def fetch_race_data_all(page=1, per_page=1000, meet_code=2, start_date=None, end_date=None, common_api=False):
+    """경마장별 엔드포인트로 경주 결과를 가져오는 함수.
 
     서울(1): SeoulRace_1 → rc_date_fr / rc_date_to (YYYYMMDD)
-    제주(2): raceResult_2 → rc_month (YYYYMM)
-    부산경남(3): raceResult_3 → rc_month (YYYYMM)
+    제주(2)·부산경남(3): raceResult_3 + meet → rc_month (YYYYMM) 또는 rc_date (YYYYMMDD)
+    common_api=True면 서울도 raceResult_3(meet=1)로 조회한다 - SeoulRace_1에는
+    말 개별 winOdds가 없어서, 단승 배당은 이 경로로만 받을 수 있다.
     """
-    endpoint = MEET_RACE_ENDPOINTS.get(meet_code, MEET_RACE_ENDPOINTS[3])
+    if common_api:
+        endpoint = COMMON_RACE_ENDPOINT
+    else:
+        endpoint = MEET_RACE_ENDPOINTS.get(meet_code, COMMON_RACE_ENDPOINT)
 
-    if meet_code == 1:
+    if meet_code == 1 and not common_api:
         # 서울 API: rc_date_to / rc_date_fr 방식
         # end_date가 YYYYMM(6자리)이면 해당 월의 1일~말일로 변환
         end_str = str(end_date) if end_date else datetime.now().strftime('%Y%m%d')
@@ -99,15 +114,19 @@ def fetch_race_data_all(page=1, per_page=1000, meet_code=2, start_date=None, end
         if rc_date_fr:
             params["rc_date_fr"] = rc_date_fr
     else:
-        # 제주·부산경남 API: rc_month 방식
-        rc_month = str(end_date)[:6] if end_date else datetime.now().strftime('%Y%m')
+        # 공용 API: 8자리 날짜면 그 하루(rc_date), 아니면 월 전체(rc_month)
+        end_str = str(end_date) if end_date else datetime.now().strftime('%Y%m')
         params = {
             "serviceKey": API_KEY,
             "pageNo": page,
             "numOfRows": per_page,
-            "rc_month": rc_month,
+            "meet": meet_code,
             "_type": "json",
         }
+        if len(end_str) == 8:
+            params["rc_date"] = end_str
+        else:
+            params["rc_month"] = end_str[:6]
 
     max_retries = 3
     for attempt in range(1, max_retries + 1):
@@ -276,6 +295,7 @@ def parse_and_normalize_race_data(api_response):
     """API 응답을 파싱하여 정규화된 테이블 구조로 변환"""
     races = []
     race_entries = []
+    race_payouts = []  # 제주·부산경남 API의 plcOdds(연승 확정 배당) - bet_type='place'
     master_data = {
         'horses': [],
         'jockeys': [],
@@ -390,12 +410,13 @@ def parse_and_normalize_race_data(api_response):
 
                     # 경주 참가 기록 (new schema columns only)
                     horse_weight, horse_weight_diff = parse_horse_weight_simple(item.get('wgHr'))
+                    entry_number = safe_int(item.get('rcChul')) if item.get('rcChul') else safe_int(item.get('chulNo'))
 
                     race_entries.append({
                         'race_id': race_id,
                         'horse_id': horse_id,
                         'race_date': race_date,
-                        'entry_number': safe_int(item.get('rcChul')) if item.get('rcChul') else safe_int(item.get('chulNo')),   #출전번호
+                        'entry_number': entry_number,   #출전번호
                         'horse_weight': horse_weight,     #마체중
                         'jk_no': jk_no,
                         'trainer_id': trainer_id,
@@ -407,6 +428,18 @@ def parse_and_normalize_race_data(api_response):
                         'finish_time': safe_float(item.get('rcTime')),  #완주기록(초)
                     })
 
+                    # 연승(place) 확정 배당 - 공용 API 응답에만 있는 plcOdds(말 개별
+                    # 값). SeoulRace_1 응답에는 이 필드가 없어 자동으로 스킵된다.
+                    plc_odds = safe_float(item.get('plcOdds'))
+                    if (meet_code in PLC_ODDS_SUPPORTED_MEET_CODES
+                            and entry_number and plc_odds and plc_odds > 0):
+                        race_payouts.append({
+                            'race_id': race_id,
+                            'bet_type': 'place',
+                            'entry_numbers': [entry_number],
+                            'odds': plc_odds,
+                        })
+
 
     except Exception as e:
         logger.error(f"데이터 파싱 중 오류 발생: {str(e)}")
@@ -414,6 +447,7 @@ def parse_and_normalize_race_data(api_response):
     return {
         'races': races,
         'race_entries': race_entries,
+        'race_payouts': race_payouts,
         'master_data': master_data
     }
 
@@ -428,17 +462,43 @@ def filter_duplicates_in_race_and_entries(races, race_entries):
             seen_race_keys.add(race_key)
 
     filtered_entries = []
-    seen_entry_keys = set()
+    seen_entries = {}
     for entry in race_entries:
         entry_key = (
             entry.get('race_id'),
             entry.get('horse_id')
         )
-        if entry_key not in seen_entry_keys:
+        first = seen_entries.get(entry_key)
+        if first is None:
             filtered_entries.append(entry)
-            seen_entry_keys.add(entry_key)
+            seen_entries[entry_key] = entry
+        elif not first.get('win_odds') and entry.get('win_odds'):
+            # 서울은 SeoulRace_1 행(winOdds 없음 → 0)이 먼저 오므로, 뒤따르는
+            # 공용 API 행의 단승 배당으로 채운다.
+            first['win_odds'] = entry['win_odds']
 
     return filtered_races, filtered_entries
+
+
+def filter_duplicates_in_payouts(race_payouts):
+    """race_payouts 리스트 내 중복 제거 (race_id, bet_type, entry_numbers 기준).
+
+    제주·부산경남 API 응답에서 동일 rcDate+rcNo에 다른 hrNo 포맷(부산·경남
+    통합 이전 잔재로 추정, [[project_race_payouts_scraper]] 참고)의 중복 행이
+    섞여 나오는 현상이 관찰된 바 있어, race_entries와 마찬가지로 선착순
+    dedup을 거친다. 같은 키에 서로 다른 odds가 온 경우는 먼저 본 값을 유지
+    (Supabase upsert도 동일 키 재전송 시 마지막 값으로 덮어쓰므로, 배치 내
+    dedup은 순서에 따라 결과가 갈릴 수 있는 극히 드문 경우를 로그로 남기지
+    않고 조용히 첫 값을 취하는 정도의 안전장치일 뿐 - 실사용 영향은 미미).
+    """
+    filtered = []
+    seen = set()
+    for p in race_payouts:
+        key = (p.get('race_id'), p.get('bet_type'), tuple(p.get('entry_numbers') or []))
+        if key not in seen:
+            filtered.append(p)
+            seen.add(key)
+    return filtered
 
 
 def filter_master_data_duplicates(parsed_master_data, existing_master_data):
@@ -493,9 +553,13 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
     races, race_entries = filter_duplicates_in_race_and_entries(
         data_dict.get('races', []), data_dict.get('race_entries', [])
     )
+    race_payouts = filter_duplicates_in_payouts(data_dict.get('race_payouts', []))
+    # 순서 중요: race_payouts.race_id가 races(race_id) FK라서 races가 먼저
+    # upsert되어야 한다 (dict는 삽입 순서를 보존함).
     table_data = {
         'races': races,
-        'race_entries': race_entries
+        'race_entries': race_entries,
+        'race_payouts': race_payouts,
     }
 
     for table_name, records in table_data.items():
@@ -587,13 +651,16 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
     all_race_data = []
     empty_pages = 0
 
-    #제주, 부산 경주 결과 수집
-    meet_codes = [1,2,3]
-    for meet_code in meet_codes:
+    # 서울은 두 번 수집한다: SeoulRace_1(두수·주로 등 경주 정보) 다음에
+    # 공용 API(말별 단승 배당). 중복 행은 저장 전에 win_odds만 병합된다.
+    sources = [(1, False), (1, True), (2, False), (3, False)]
+    for meet_code, common_api in sources:
         if meet_code == 2:
             print("제주 경주 결과 수집 시작")
         elif meet_code == 3:
             print("부산 경주 결과 수집 시작")
+        elif common_api:
+            print("서울 단승 배당 수집 시작")
         elif meet_code == 1:
             print("서울 경주 결과 수집 시작")
 
@@ -603,7 +670,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
         while current <= end:
             for page in range(start_page, start_page + max_pages):
                 try:
-                    api_data, _ = fetch_race_data_all(page=page, meet_code=meet_code, end_date=current.strftime('%Y%m'))
+                    api_data, _ = fetch_race_data_all(page=page, meet_code=meet_code, end_date=current.strftime('%Y%m'), common_api=common_api)
                     if api_data:
                         parsed_data = parse_and_normalize_race_data(api_data)
                         race_entries = parsed_data.get('race_entries', [])
@@ -639,6 +706,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
         combined_data = {
             'races': [],
             'race_entries': [],
+            'race_payouts': [],
             'master_data': {
                 'horses': [],
                 'jockeys': [],
@@ -648,7 +716,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
         }
 
         for data in all_race_data:
-            for key in ['races', 'race_entries']:
+            for key in ['races', 'race_entries', 'race_payouts']:
                 combined_data[key].extend(data.get(key, []))
 
             # 마스터 데이터도 통합

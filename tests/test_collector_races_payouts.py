@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 library/collector_races.py의 plcOdds(연승 확정 배당) 파싱 테스트.
-제주(raceResult_2)·부산경남(raceResult_3) API 응답에만 있는 개별 말 plcOdds
-필드를 race_payouts(bet_type='place') 형태로 변환하는 로직 검증
-([[project_race_payouts_scraper]] 참고). 서울(SeoulRace_1)은 이 필드가 없어
-race_payouts를 만들지 않아야 한다.
+공용 API(raceResult_3) 응답에만 있는 개별 말 plcOdds 필드를
+race_payouts(bet_type='place') 형태로 변환하는 로직 검증
+([[project_race_payouts_scraper]] 참고). 서울 전용 SeoulRace_1 응답은 이
+필드가 없어 race_payouts를 만들지 않아야 하고, 서울도 공용 API 응답이면
+만들어야 한다.
 """
 from library.collector_races import (
     parse_and_normalize_race_data,
@@ -61,8 +62,8 @@ def _seoul_item(chul_no, rc_no=1, rc_date=20260502):
 
 
 class TestPlcOddsSupportedMeets:
-    def test_supported_meets_are_jeju_and_busan(self):
-        assert PLC_ODDS_SUPPORTED_MEET_CODES == {2, 3}
+    def test_supported_meets_are_all_three(self):
+        assert PLC_ODDS_SUPPORTED_MEET_CODES == {1, 2, 3}
 
 
 class TestParsePlaceOddsFromPlcOdds:
@@ -81,8 +82,19 @@ class TestParsePlaceOddsFromPlcOdds:
             assert p["race_id"] == "2026-05-31_부산경남_1"
             assert len(p["entry_numbers"]) == 1
 
-    def test_seoul_has_no_place_payouts(self):
-        """서울(meet_code=1) API 응답에는 plcOdds 필드 자체가 없다 - race_payouts가
+    def test_seoul_common_api_place_payouts_parsed(self):
+        """서울도 공용 API(raceResult_3, meet=1) 응답에는 말 개별 plcOdds가 있다."""
+        items = [dict(_busan_item(1, 1.1), meet="서울"), dict(_busan_item(2, 3.1), meet="서울")]
+        result = parse_and_normalize_race_data(_make_response(items))
+
+        payouts = result["race_payouts"]
+        assert {p["entry_numbers"][0]: p["odds"] for p in payouts} == {1: 1.1, 2: 3.1}
+        for p in payouts:
+            assert p["bet_type"] == "place"
+            assert p["race_id"] == "2026-05-31_서울_1"
+
+    def test_seoul_race_api_has_no_place_payouts(self):
+        """서울 전용 SeoulRace_1 응답에는 plcOdds 필드 자체가 없다 - race_payouts가
         비어 있어야 한다."""
         items = [_seoul_item(1), _seoul_item(2)]
         result = parse_and_normalize_race_data(_make_response(items))

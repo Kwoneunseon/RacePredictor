@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-제주·부산경남 연승(place) 확정 배당 소급 백필 스크립트.
+서울·제주·부산경남 연승(place) 확정 배당 소급 백필 스크립트.
 
-`library/collector_races.py`가 이미 쓰는 공공데이터포털 API
-(raceResult_2=제주, raceResult_3=부산경남, rc_month=YYYYMM 방식)는
+`library/collector_races.py`가 이미 쓰는 공공데이터포털 공용 API
+(raceResult_3 + meet, rc_month=YYYYMM 방식)는
 과거 날짜 소급조회가 가능하고, 응답의 개별 말 `plcOdds` 필드가 실제
 확정 연승 배당임이 검증되었다(winOdds가 race_entries.win_odds와 완전
 일치 - [[project_race_payouts_scraper]] 참고). ScoreInfo.do(소급 불가
 확정, 2026-08-02)와 달리 이 경로는 진짜 과거 데이터를 준다.
 
-서울(SeoulRace_1)은 말 개별 plcOdds 필드가 없어 이 스크립트로 커버하지
-못한다 - PLC_ODDS_SUPPORTED_MEET_CODES = {2, 3} (제주·부산경남)만 대상.
+서울 전용 SeoulRace_1에는 말 개별 plcOdds 필드가 없으므로, 서울도 공용
+API(common_api=True)로 조회한다 - PLC_ODDS_SUPPORTED_MEET_CODES = {1, 2, 3}.
 
 주의: 이 스크립트는 `races`/`race_entries` 테이블은 건드리지 않는다.
 `race_payouts.race_id`가 `races(race_id)` FK이므로, 대상 기간의 races가
@@ -40,7 +40,7 @@ from Utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MEET_NAMES = {2: "제주", 3: "부산경남"}
+MEET_NAMES = {1: "서울", 2: "제주", 3: "부산경남"}
 
 
 def _months_between(start: str, end: str) -> list[str]:
@@ -65,7 +65,7 @@ def fetch_month_payouts(meet_code: int, rc_month: str, start: str, end: str) -> 
     page = 1
     per_page = 1000
     while True:
-        api_data, _ = fetch_race_data_all(page=page, per_page=per_page, meet_code=meet_code, end_date=rc_month)
+        api_data, _ = fetch_race_data_all(page=page, per_page=per_page, meet_code=meet_code, end_date=rc_month, common_api=True)
         if not api_data:
             logger.warning(f"  {MEET_NAMES.get(meet_code)} {rc_month} 페이지 {page}: API 응답 없음, 중단")
             break
@@ -110,7 +110,7 @@ def backfill(start: str, end: str, meet_codes: list[int] = None) -> dict:
                 if not month_payouts:
                     # 페이지 1에서부터 API가 아예 실패했는지(500 등) 구분하기 위해
                     # 최소 한 번은 원시 응답을 확인한다.
-                    probe, _ = fetch_race_data_all(page=1, per_page=1, meet_code=meet_code, end_date=rc_month)
+                    probe, _ = fetch_race_data_all(page=1, per_page=1, meet_code=meet_code, end_date=rc_month, common_api=True)
                     if not probe:
                         api_failed = True
                 all_payouts.extend(month_payouts)
