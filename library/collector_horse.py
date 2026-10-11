@@ -329,10 +329,11 @@ def fetch_single_horse_data(horse_id):
 
     horse_data = horse_data[0]  # 단일 말 정보이므로 첫 번째 요소만 사용
 
-    additional_data = fetch_additional_horse_data(horse_id)
-    if additional_data:
-        horse_additional_info = parse_additional_horse_data(additional_data)
-        horse_data.update(horse_additional_info)
+    # 성적정보(API15_2) 미사용: 저장할 컬럼이 없고 한도 5회라 429만 난다.
+    # additional_data = fetch_additional_horse_data(horse_id)
+    # if additional_data:
+    #     horse_additional_info = parse_additional_horse_data(additional_data)
+    #     horse_data.update(horse_additional_info)
 
     return horse_data
 
