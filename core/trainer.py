@@ -4,6 +4,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import roc_auc_score, accuracy_score, ndcg_score
 from xgboost import XGBRanker, XGBClassifier
 from lightgbm import LGBMRanker, LGBMClassifier
@@ -11,6 +12,11 @@ from config import FEATURE_COLUMNS, MODEL_CONFIG, MODEL_DIR
 from Utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# 확률 보정(isotonic regression) 학습용 홀드아웃은 이 날짜 이전 데이터만 쓴다.
+# scripts/backtest_win.py·backtest_top3.py의 기본 백테스트 구간(2026-05-01~)과
+# 겹치면 백테스트 평가 지표가 오염되므로, 반드시 그 시작일보다 이전으로 유지할 것.
+CALIBRATION_EVAL_CUTOFF = "2026-05-01"
 
 
 class RaceModelTrainer:
@@ -20,6 +26,8 @@ class RaceModelTrainer:
         self.top3_ranker_models: dict = {}  # 연승 ranker 모델 (XGBRanker, LGBMRanker)
         self.scaler = StandardScaler()
         self.feature_columns: list = []
+        self.win_calibrator: IsotonicRegression | None = None
+        self.top3_calibrator: IsotonicRegression | None = None
 
     # ──────────────────────────────────
     # Public API
@@ -58,6 +66,8 @@ class RaceModelTrainer:
             X_train, X_test, y_train_top3, y_test_top3,
             X_train_s, X_test_s, target="top3", best_params=best_params,
         )
+
+        self._fit_calibrators(df_sorted, split_idx, X_test, y_test_win, y_test_top3)
 
         # XGBoost·LightGBM: pairwise ranker (경주 내 상대 순위 직접 학습)
         ranker_metrics      = self._train_pairwise_rankers(df_sorted, feature_cols, best_params)
@@ -228,17 +238,25 @@ class RaceModelTrainer:
             return None
         return np.mean(scores_list, axis=0)
 
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        """단승(1등) 확률 앙상블"""
+    def predict_proba(self, X: pd.DataFrame, raw: bool = False) -> np.ndarray:
+        """단승(1등) 확률 앙상블. win_calibrator가 있으면 보정된 확률을 반환한다
+        (raw=True로 강제 원본 확률 — 보정 자체를 학습할 때 등 내부용)."""
         if not self.models:
             raise ValueError("모델이 학습되지 않았습니다.")
-        return self._ensemble_proba(self.models, X)
+        proba = self._ensemble_proba(self.models, X)
+        if not raw and self.win_calibrator is not None:
+            proba = self.win_calibrator.predict(proba)
+        return proba
 
-    def predict_proba_top3(self, X: pd.DataFrame) -> np.ndarray | None:
-        """연승(3등 이내) 확률 앙상블. top3_models 없으면 None."""
+    def predict_proba_top3(self, X: pd.DataFrame, raw: bool = False) -> np.ndarray | None:
+        """연승(3등 이내) 확률 앙상블. top3_models 없으면 None.
+        top3_calibrator가 있으면 보정된 확률을 반환한다(raw=True로 원본 강제)."""
         if not self.top3_models:
             return None
-        return self._ensemble_proba(self.top3_models, X)
+        proba = self._ensemble_proba(self.top3_models, X)
+        if not raw and self.top3_calibrator is not None:
+            proba = self.top3_calibrator.predict(proba)
+        return proba
 
     # ──────────────────────────────────
     # 내부 헬퍼
@@ -332,6 +350,37 @@ class RaceModelTrainer:
         else:
             self.top3_models.update(results)
         return metrics
+
+    def _fit_calibrators(
+        self, df_sorted: pd.DataFrame, split_idx: int,
+        X_test: pd.DataFrame, y_test_win: pd.Series, y_test_top3: pd.Series,
+    ) -> None:
+        """단승/연승 앙상블 확률을 isotonic regression으로 보정한다.
+
+        core/investor.py가 model_prob을 배당과 곱해 EV·베팅액을 직접 계산하므로,
+        임계값 정확도뿐 아니라 확률값 자체의 신뢰도가 중요하다. CALIBRATION_EVAL_CUTOFF
+        이전 데이터만 써서 scripts/backtest_win.py·backtest_top3.py의 평가 구간을
+        오염시키지 않는다. train()의 내부 홀드아웃(X_test)은 모델이 학습 시 보지 않은
+        구간이라 보정 학습에 그대로 써도 안전하다.
+        """
+        test_dates = df_sorted.iloc[split_idx:]["race_date"]
+        calib_mask = test_dates < CALIBRATION_EVAL_CUTOFF
+        n_calib = int(calib_mask.sum())
+        if n_calib < 30:
+            logger.warning(f"확률 보정 홀드아웃 표본 부족({n_calib}건) — 보정 생략")
+            return
+
+        X_calib = X_test[calib_mask]
+        raw_win = self.predict_proba(X_calib, raw=True)
+        self.win_calibrator = IsotonicRegression(out_of_bounds="clip")
+        self.win_calibrator.fit(raw_win, y_test_win[calib_mask])
+
+        raw_top3 = self.predict_proba_top3(X_calib, raw=True)
+        if raw_top3 is not None:
+            self.top3_calibrator = IsotonicRegression(out_of_bounds="clip")
+            self.top3_calibrator.fit(raw_top3, y_test_top3[calib_mask])
+
+        logger.info(f"확률 보정(isotonic) 완료 — 홀드아웃 {n_calib}건 ({CALIBRATION_EVAL_CUTOFF} 이전)")
 
     def _train_pairwise_rankers(
         self, df_sorted: pd.DataFrame, feature_cols: list, best_params: dict

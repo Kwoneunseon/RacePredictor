@@ -23,6 +23,8 @@ class ModelManager:
             "scaler": trainer.scaler,
             "feature_columns": trainer.feature_columns,
             "label_encoders": preprocessor.label_encoders,
+            "win_calibrator": trainer.win_calibrator,
+            "top3_calibrator": trainer.top3_calibrator,
         }
         meta = {
             "version": version,
@@ -62,6 +64,8 @@ class ModelManager:
             trainer.scaler = data["scaler"]
             trainer.feature_columns = data["feature_columns"]
             preprocessor.label_encoders = data["label_encoders"]
+            trainer.win_calibrator = data.get("win_calibrator")
+            trainer.top3_calibrator = data.get("top3_calibrator")
             logger.info(f"모델 로드: {pkl_path}")
             return True
         except Exception as e:

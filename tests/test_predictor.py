@@ -88,6 +88,46 @@ def test_predictor_top3_probability_ignores_ranker():
     assert top3["말C"] == pytest.approx(0.2)
 
 
+def test_predictor_top3_probability_uses_raw_not_calibrated():
+    """top3_probability는 trainer.predict_proba_top3(X, raw=True)로 호출해 isotonic
+    보정이 적용되지 않은 원본 분류기 확률을 써야 한다.
+
+    이유(진단: scripts/diagnose_calibration.py, 2026-07-31): isotonic 보정은 top3
+    쪽에서 Brier/ECE 개선폭이 미미한 반면(-1.4%/-33%, win 쪽 -23%/-75%보다 훨씬 약함),
+    408경주 백테스트로 검증된 TOP3_PROB_THRESHOLD=0.65를 그대로 적용하면 통과 경주가
+    61.6%→28.7%로 급감한다(2026-05-01~07-31, 596경주). 임계값 재검증 없이 이런 변화가
+    조용히 반영되는 것을 막기 위해 raw=True를 명시적으로 강제한다.
+    win_probability는 EV 계산에 절대값이 직접 쓰이고 개선폭도 크므로 계속 보정된 값을
+    쓴다(raw 인자 없이 기본 호출) — 이 비대칭은 의도된 것.
+    """
+    import numpy as np, pandas as pd
+    from core.predictor import RacePredictor
+    from unittest.mock import MagicMock
+
+    trainer = MagicMock()
+    trainer.feature_columns = ["horse_age"]
+    trainer.predict_rank_score.return_value = None
+    trainer.predict_rank_score_top3.return_value = None
+    trainer.predict_proba.return_value = np.array([0.5, 0.3, 0.2])
+    trainer.predict_proba_top3.return_value = np.array([0.4, 0.4, 0.2])
+
+    preprocessor = MagicMock()
+    df = pd.DataFrame({
+        "horse_age": [4, 5, 3],
+        "horse_name": ["말A", "말B", "말C"],
+        "entry_number": [1, 2, 3],
+        "race_id": ["r1", "r1", "r1"],
+    })
+
+    p = RacePredictor(trainer, preprocessor)
+    p.predict(df)
+
+    assert trainer.predict_proba_top3.call_args.kwargs.get("raw") is True, \
+        "predict_proba_top3는 raw=True로 호출되어야 함 (top3_probability는 미보정 원본 확률 유지)"
+    # win_probability 쪽은 계속 보정된 값을 쓰므로 raw 인자를 넘기지 않아야 함(기본값=보정 적용)
+    assert "raw" not in trainer.predict_proba.call_args.kwargs
+
+
 def test_predictor_predict_merges_history_columns(mock_trainer_and_preprocessor):
     """predict_from_db에서 horse_race_history가 병합되는 경로를 단위 검증."""
     trainer, preprocessor = mock_trainer_and_preprocessor

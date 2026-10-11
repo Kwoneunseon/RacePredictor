@@ -64,6 +64,44 @@ def test_trainer_predict_proba_shape(preprocessed_df):
     assert (proba >= 0).all() and (proba <= 1).all()
 
 
+def test_trainer_fits_calibrators(preprocessed_df):
+    """train() 이후 win/top3 isotonic calibrator가 채워지고, predict_proba(raw=False)가
+    기본으로 보정된 확률(raw=True와 달라질 수 있는 값)을 반환하는지 확인."""
+    from sklearn.isotonic import IsotonicRegression
+
+    trainer = RaceModelTrainer()
+    trainer.train(preprocessed_df)
+    assert isinstance(trainer.win_calibrator, IsotonicRegression)
+    assert isinstance(trainer.top3_calibrator, IsotonicRegression)
+
+    from config import FEATURE_COLUMNS
+    available = [c for c in FEATURE_COLUMNS if c in preprocessed_df.columns]
+    X = preprocessed_df[available].head(10)
+    calibrated = trainer.predict_proba(X)
+    raw = trainer.predict_proba(X, raw=True)
+    assert calibrated.shape == raw.shape
+    assert (calibrated >= 0).all() and (calibrated <= 1).all()
+
+
+def test_calibrator_skipped_when_holdout_too_small():
+    """CALIBRATION_EVAL_CUTOFF 이전 표본이 30건 미만이면 보정을 생략하고
+    None으로 남겨 predict_proba가 원본 확률 그대로 반환하는지 확인."""
+    import pandas as pd
+    from core.trainer import RaceModelTrainer
+
+    trainer = RaceModelTrainer()
+    n = 20
+    df_test = pd.DataFrame({
+        "horse_age": [4] * n,
+    })
+    y_win = pd.Series([0, 1] * (n // 2))
+    y_top3 = pd.Series([0, 1] * (n // 2))
+    df_sorted = pd.DataFrame({"race_date": pd.date_range("2026-01-01", periods=n + 10)})
+    trainer._fit_calibrators(df_sorted, 10, df_test, y_win, y_top3)
+    assert trainer.win_calibrator is None
+    assert trainer.top3_calibrator is None
+
+
 def _make_race_df(n_races=30, horses_per=8, seed=0):
     """ranker 테스트용 경주 데이터 생성."""
     np.random.seed(seed)

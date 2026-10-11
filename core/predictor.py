@@ -46,7 +46,16 @@ class RacePredictor:
         rank_scores      = self.trainer.predict_rank_score(X)
         rank_scores_top3 = self.trainer.predict_rank_score_top3(X)
         clf_probs        = self.trainer.predict_proba(X)
-        clf_probs_top3   = self.trainer.predict_proba_top3(X)
+        # top3_probability는 raw=True(isotonic 미적용)를 명시적으로 강제한다.
+        # 진단 결과(scripts/diagnose_calibration.py, 2026-07-31): isotonic 보정은
+        # Brier/ECE 개선폭이 미미하고(-1.4%/-33%, win 쪽 -23%/-75%에 비해 약함),
+        # TOP3_PROB_THRESHOLD=0.65(408경주 백테스트로 검증, project_next_task)를
+        # 그대로 유지한 채 적용하면 통과 경주가 61.6%→28.7%로 급감한다 — 임계값의
+        # 의미가 바뀌는데 재검증 없이 조용히 적용되는 것과 같아 project_top3_no_blend가
+        # 경고하는 것과 동일한 종류의 회귀. win_probability는 EV=model_prob×odds 계산에
+        # 직접 쓰여 절대값 정확도가 중요하므로 계속 보정된 값을 쓰지만(개선폭도 크다),
+        # top3_probability는 raw 유지가 안전하다.
+        clf_probs_top3   = self.trainer.predict_proba_top3(X, raw=True)
 
         if not isinstance(rank_scores, np.ndarray):
             rank_scores = None

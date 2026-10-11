@@ -13,6 +13,8 @@ def test_save_creates_pkl_file(tmp_path, mocker):
     trainer.top3_ranker_models = {}
     trainer.scaler = "serializable_scaler_object"
     trainer.feature_columns = ["col1", "col2"]
+    trainer.win_calibrator = None
+    trainer.top3_calibrator = None
     preprocessor = MagicMock()
     preprocessor.label_encoders = {}
 
@@ -30,6 +32,8 @@ def test_load_restores_trainer(tmp_path, mocker):
     trainer.top3_ranker_models = {}
     trainer.scaler = "fake_scaler"
     trainer.feature_columns = ["col1"]
+    trainer.win_calibrator = None
+    trainer.top3_calibrator = None
     preprocessor = MagicMock()
     preprocessor.label_encoders = {"horse_class": "enc"}
 
@@ -58,6 +62,8 @@ def test_save_load_preserves_top3_ranker_models(tmp_path, mocker):
     trainer.top3_ranker_models = {"XGBoost": "fake_xgb", "LightGBM": "fake_lgb"}
     trainer.scaler = "fake_scaler"
     trainer.feature_columns = ["col1"]
+    trainer.win_calibrator = None
+    trainer.top3_calibrator = None
     preprocessor = MagicMock()
     preprocessor.label_encoders = {}
 

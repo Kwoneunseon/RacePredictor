@@ -129,7 +129,7 @@ def run_predictions(start_date: str, end_date: str):
     available = [c for c in features if c in df_proc.columns]
     X = df_proc[available].fillna(0)
 
-    top3_probs = trainer.predict_proba_top3(X)
+    top3_probs = trainer.predict_proba_top3(X, raw=True)
     win_probs  = trainer.predict_proba(X)
 
     if top3_probs is None:
