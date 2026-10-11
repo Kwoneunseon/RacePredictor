@@ -8,8 +8,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
+from config import NON_FINISH_RANK_MIN
 from Utils.database import get_client
-from core.feature_builder import RaceFeatureBuilder
+from core.feature_builder import RaceFeatureBuilder, drop_deleted_races
 from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.model_manager import ModelManager
@@ -61,24 +62,30 @@ def capture_report(kind: str):
 def load_historical_data(start_date: str, end_date: str) -> pd.DataFrame:
     """final_rank 있는 과거 race_entries 로드"""
     client = get_client()
+
+    def _query(columns, **kwargs):
+        return client.table("race_entries").select(columns, **kwargs)\
+            .gte("race_date", start_date).lte("race_date", end_date)\
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN)
+
+    expected = _query("id", count="exact").limit(1).execute().count
     all_entries = []
     page_size = 1000
-    offset = 0
+    last_id = 0
     while True:
-        result = client.table("race_entries").select(
-            "*, horses(*), races(*), jockeys(*), trainers(*)"
-        ).gte("race_date", start_date)\
-         .lte("race_date", end_date)\
-         .gt("final_rank", 0)\
-         .order("id")\
-         .range(offset, offset + page_size - 1).execute()
+        # OFFSET은 뒤 페이지일수록 느려져 statement timeout에 걸린다 - id keyset으로 읽는다
+        result = _query("*, horses(*), races(*), jockeys(*), trainers(*)")\
+            .gt("id", last_id).order("id").limit(page_size).execute()
         if not result.data:
             break
         all_entries.extend(result.data)
         if len(result.data) < page_size:
             break
-        offset += page_size
+        last_id = result.data[-1]["id"]
+    if len(all_entries) != expected:
+        raise RuntimeError(f"race_entries 로드 불완전: {len(all_entries)}건 / 기대 {expected}건")
 
+    all_entries = drop_deleted_races(all_entries)
     if not all_entries:
         return pd.DataFrame()
 
@@ -111,7 +118,8 @@ def run_predictions(start_date: str, end_date: str):
     print("피처 빌드 중...")
     fb = RaceFeatureBuilder()
     df_feat = fb.build_for_training(df_raw, end_date)
-    df_feat = df_feat.dropna(subset=["horse_age", "race_distance"])
+    # horse_age 결측은 전처리에서 대체한다(main.py 학습 경로와 동일)
+    df_feat = df_feat.dropna(subset=["race_distance"])
 
     final_ranks   = df_feat["final_rank"].copy()
     race_ids      = df_feat["race_id"].copy() if "race_id" in df_feat.columns else pd.Series(range(len(df_feat)))

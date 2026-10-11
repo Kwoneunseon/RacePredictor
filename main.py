@@ -1,7 +1,7 @@
 import argparse
 from datetime import datetime
 
-from config import TOP3_PROB_THRESHOLD
+from config import NON_FINISH_RANK_MIN, TOP3_PROB_THRESHOLD
 from Utils.database import get_client
 from Utils.logger import get_logger
 from core.preprocessor import RacePreprocessor
@@ -33,26 +33,33 @@ def _resolve_dates(args) -> list[str]:
 
 def _fetch_race_entries(args) -> "pd.DataFrame":
     import pandas as pd
-    from core.feature_builder import RaceFeatureBuilder
+    from core.feature_builder import RaceFeatureBuilder, drop_deleted_races
 
     client = get_client()
+
+    def _query(columns, **kwargs):
+        return client.table("race_entries").select(columns, **kwargs)\
+            .gte("race_date", args.start_date).lte("race_date", args.end_date)\
+            .gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN)
+
+    expected = _query("id", count="exact").limit(1).execute().count
     all_entries = []
     page_size = 1000
-    offset = 0
+    last_id = 0
     while True:
-        result = client.table("race_entries").select(
-            "*, horses(*), races(*), jockeys(*), trainers(*)"
-        ).gte("race_date", args.start_date).lte("race_date", args.end_date)\
-            .gt("final_rank", 0)\
-            .order("id")\
-            .range(offset, offset + page_size - 1).execute()
+        # OFFSET은 뒤 페이지일수록 느려져 statement timeout에 걸린다 - id keyset으로 읽는다
+        result = _query("*, horses(*), races(*), jockeys(*), trainers(*)")\
+            .gt("id", last_id).order("id").limit(page_size).execute()
         if not result.data:
             break
         all_entries.extend(result.data)
         if len(result.data) < page_size:
             break
-        offset += page_size
+        last_id = result.data[-1]["id"]
+    if len(all_entries) != expected:
+        raise RuntimeError(f"race_entries 로드 불완전: {len(all_entries)}건 / 기대 {expected}건")
 
+    all_entries = drop_deleted_races(all_entries)
     if not all_entries:
         return pd.DataFrame()
 
@@ -74,7 +81,8 @@ def cmd_tune(args):
 
     fb = RaceFeatureBuilder()
     df = fb.build_for_training(df, args.end_date)
-    df = df.dropna(subset=["horse_age", "race_distance"])
+    # horse_age 결측은 전처리에서 대체한다 - 말 단위로 행을 빼면 경주가 불완전해진다
+    df = df.dropna(subset=["race_distance"])
 
     preprocessor = RacePreprocessor()
     df_processed = preprocessor.fit_transform(df)
@@ -99,7 +107,8 @@ def cmd_train(args):
     df = fb.build_for_training(df, args.end_date)
 
     before = len(df)
-    df = df.dropna(subset=["horse_age", "race_distance"])
+    # horse_age 결측은 전처리에서 대체한다 - 말 단위로 행을 빼면 경주가 불완전해진다
+    df = df.dropna(subset=["race_distance"])
     logger.info(f"학습 데이터: {len(df)}건 (피처 없는 {before - len(df)}건 제외)")
 
     preprocessor = RacePreprocessor()
@@ -134,7 +143,9 @@ def _ensure_race_data(date: str) -> bool:
     try:
         from library.collector_races import collecting_race_results
         date_nodash = date.replace("-", "")
-        collecting_race_results(start_date=date_nodash, end_date=date_nodash)
+        first_date = collecting_race_results(start_date=date_nodash, end_date=date_nodash)
+        from core.history_rebuilder import rebuild_after_collect
+        rebuild_after_collect(first_date)
         logger.info(f"{date} 데이터 수집 완료")
         return True
     except Exception as e:
@@ -182,7 +193,7 @@ def _format_actual_result(rows: list[dict]) -> str:
 def _fetch_actual_results(date: str, client) -> dict:
     """해당 날짜에 이미 완주 기록(final_rank)이 있는 경주만 race_id → "1-3-4-11" 형태로 매핑."""
     res = client.table("race_entries").select("race_id, entry_number, final_rank")\
-        .eq("race_date", date).gt("final_rank", 0).execute()
+        .eq("race_date", date).gt("final_rank", 0).lt("final_rank", NON_FINISH_RANK_MIN).execute()
     if not res.data:
         return {}
     by_race: dict = {}
