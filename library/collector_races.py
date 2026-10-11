@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 
 from library.parsing import parse_date, safe_int, safe_float, safe_str
-from config import API_KEY
+from config import API_KEY, NON_FINISH_RANK_MIN
 from Utils.database import upsert, get_client
 from Utils.logger import get_logger
 from .collector_horse import fetch_single_horse_data as horse_fetch_page, save_to_supabase_batch as save_horse_data, parse_horse_data
@@ -376,7 +376,7 @@ def parse_and_normalize_race_data(api_response):
                             'race_grade': safe_str(item.get('rcGrade')) if item.get('rcGrade') else safe_str(item.get('rcName')), #경주등급
                             'track_condition': safe_str(item.get('track')) if item.get('track') else '', #경주로상태
                             'weather': safe_str(item.get('weath')) if item.get('weath') else safe_str(item.get('weather')),         #날씨
-                            'total_horses': safe_int(item.get('rcVtdusu'))  if item.get('rcVtdusu') else 11, #총 출전마 수
+                            'total_horses': safe_int(item.get('rcVtdusu')),  #저장 직전 count_starters 값으로 바뀐다
                         })
                         processed_races.add(race_key)
 
@@ -538,6 +538,16 @@ def filter_duplicates_in_race_and_entries(races, race_entries):
     return filtered_races, filtered_entries
 
 
+def count_starters(race_entries):
+    """경주별 출전 두수. 출전취소·제외(비착순 코드이면서 단승 배당 없음)는 세지 않는다."""
+    counts = {}
+    for e in race_entries:
+        if (e.get('final_rank') or 0) >= NON_FINISH_RANK_MIN and not e.get('win_odds'):
+            continue
+        counts[e['race_id']] = counts.get(e['race_id'], 0) + 1
+    return counts
+
+
 def split_by_finish_time(race_entries):
     """기록 있는 행과 없는 행을 나눈다. 없는 행은 finish_time 키를 빼서 upsert가 기존 기록을 0으로 덮지 않게 한다."""
     timed = [e for e in race_entries if e.get('finish_time')]
@@ -623,6 +633,10 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
     races, race_entries = filter_duplicates_in_race_and_entries(
         data_dict.get('races', []), data_dict.get('race_entries', [])
     )
+    # 공용 API에는 두수 필드가 없어 출전 행을 세어 넣는다
+    starters = count_starters(race_entries)
+    for race in races:
+        race['total_horses'] = starters.get(race['race_id'], 0)
     race_payouts = filter_duplicates_in_payouts(data_dict.get('race_payouts', []))
     # 순서 중요: race_payouts.race_id가 races(race_id) FK라서 races가 먼저
     # upsert되어야 한다 (dict는 삽입 순서를 보존함).

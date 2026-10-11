@@ -229,3 +229,49 @@ def test_save_horse_attrs_skips_horses_not_in_db(mocker):
     upsert = _save_attrs_with_existing(
         mocker, [], [{"horse_id": "NEW", "birth_year": 2020, "gender": "수", "gelded_since": None}])
     upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# collector_races: 출전 두수(total_horses)
+# ---------------------------------------------------------------------------
+
+def _starter(horse_id, final_rank, win_odds, race_id="2026-06-06_제주_1"):
+    return {"race_id": race_id, "horse_id": horse_id, "final_rank": final_rank, "win_odds": win_odds}
+
+
+def test_count_starters_excludes_scratched_but_keeps_non_finishers():
+    """출전취소·제외(비착순 코드 + 배당 없음)는 빼고, 주행중지처럼 배당이 있는 말은 센다."""
+    from library.collector_races import count_starters
+    entries = [
+        _starter("a", 1, 2.5), _starter("b", 2, 7.0),
+        _starter("c", 92, 15.3),   # 주행중지: 출발은 했다
+        _starter("d", 94, 0.0),    # 출전취소
+        _starter("e", 0, 0.0),     # 결과 전 출전표
+    ]
+    assert count_starters(entries) == {"2026-06-06_제주_1": 4}
+
+
+def test_save_normalized_data_sets_total_horses_from_entries(mocker):
+    """공용 API에는 두수 필드가 없다 - 고정값 대신 출전 행을 세어 저장해야 한다."""
+    from library import collector_races
+    mocker.patch.object(collector_races, "save_missing_master_data",
+                        return_value={"horses": 0, "jockeys": 0, "trainers": 0})
+    saved = {}
+    mocker.patch.object(collector_races, "save_table_data",
+                        side_effect=lambda table, rows, batch_size: saved.setdefault(table, []).extend(rows) or len(rows))
+    mocker.patch("time.sleep")
+    race_id = "2026-06-06_제주_1"
+    data = {
+        "races": [{"race_id": race_id, "total_horses": 0}],
+        "race_entries": [_starter("a", 1, 2.5), _starter("b", 2, 7.0), _starter("d", 94, 0.0)],
+    }
+    collector_races.save_normalized_data(data, {"horses": set(), "jockeys": set(), "trainers": set(), "owners": set()})
+    assert saved["races"][0]["total_horses"] == 2
+
+
+def test_parse_does_not_invent_total_horses_when_api_has_none():
+    from library.collector_races import parse_and_normalize_race_data
+    item = {"rcDate": 20260606, "meet": "제주", "rcNo": 1, "hrNo": "0047063", "hrName": "말",
+            "jkNo": "080001", "trNo": "070001", "owNo": "010001", "chulNo": 3, "ord": 1}
+    parsed = parse_and_normalize_race_data({"response": {"body": {"items": {"item": [item]}}}})
+    assert parsed["races"][0]["total_horses"] != 11
