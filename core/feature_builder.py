@@ -59,6 +59,20 @@ def _gender_at_race(gender, gelded_since, race_date):
             return "수"
     return gender
 
+def fetch_unranked_race_ids(client, start_date: str, end_date: str) -> set:
+    """학습/백테스트 전용. 완주기록은 있는데 착순이 없는 말이 있는 경주(착순 있는 말만 남아 두수가 줄어든 채 학습됨)."""
+    race_ids, last_id = set(), 0
+    while True:
+        rows = client.table("race_entries").select("id, race_id, final_rank, finish_time")\
+            .gte("race_date", start_date).lte("race_date", end_date)\
+            .eq("final_rank", 0).gt("finish_time", 0)\
+            .gt("id", last_id).order("id").limit(1000).execute().data or []
+        race_ids.update(r["race_id"] for r in rows if not r.get("final_rank") and r.get("finish_time"))
+        if len(rows) < 1000:
+            return race_ids
+        last_id = rows[-1]["id"]
+
+
 
 class RaceFeatureBuilder:
     """

@@ -33,7 +33,7 @@ def _resolve_dates(args) -> list[str]:
 
 def _fetch_race_entries(args) -> "pd.DataFrame":
     import pandas as pd
-    from core.feature_builder import RaceFeatureBuilder, drop_deleted_races
+    from core.feature_builder import RaceFeatureBuilder, drop_deleted_races, fetch_unranked_race_ids
 
     client = get_client()
 
@@ -60,6 +60,8 @@ def _fetch_race_entries(args) -> "pd.DataFrame":
         raise RuntimeError(f"race_entries 로드 불완전: {len(all_entries)}건 / 기대 {expected}건")
 
     all_entries = drop_deleted_races(all_entries)
+    unranked = fetch_unranked_race_ids(client, args.start_date, args.end_date)
+    all_entries = [e for e in all_entries if e.get("race_id") not in unranked]
     if not all_entries:
         return pd.DataFrame()
 

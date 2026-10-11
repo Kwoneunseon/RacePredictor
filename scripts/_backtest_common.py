@@ -10,7 +10,7 @@ import numpy as np
 
 from config import NON_FINISH_RANK_MIN
 from Utils.database import get_client
-from core.feature_builder import RaceFeatureBuilder, drop_deleted_races
+from core.feature_builder import RaceFeatureBuilder, drop_deleted_races, fetch_unranked_race_ids
 from core.preprocessor import RacePreprocessor
 from core.trainer import RaceModelTrainer
 from core.model_manager import ModelManager
@@ -86,6 +86,8 @@ def load_historical_data(start_date: str, end_date: str) -> pd.DataFrame:
         raise RuntimeError(f"race_entries 로드 불완전: {len(all_entries)}건 / 기대 {expected}건")
 
     all_entries = drop_deleted_races(all_entries)
+    unranked = fetch_unranked_race_ids(client, start_date, end_date)
+    all_entries = [e for e in all_entries if e.get("race_id") not in unranked]
     if not all_entries:
         return pd.DataFrame()
 

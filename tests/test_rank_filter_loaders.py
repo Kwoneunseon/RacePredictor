@@ -183,3 +183,38 @@ def test_loader_reads_exact_multiple_of_page_size(run_loader):
 def test_loader_raises_when_fewer_rows_than_count(run_loader):
     with pytest.raises(RuntimeError, match="로드 불완전"):
         run_loader(_KeysetClient(_many_entries(1500), total=1600))
+
+
+def _entries_with_unranked_timed_row():
+    """R2에는 완주기록은 있는데 착순이 없는 말이 있다(R1은 정상)."""
+    return [
+        {"id": 1, "race_id": "R1", "horse_id": "H1", "final_rank": 1, "finish_time": 80.0, "deleted": 0},
+        {"id": 2, "race_id": "R1", "horse_id": "H2", "final_rank": 2, "finish_time": 80.5, "deleted": 0},
+        {"id": 3, "race_id": "R2", "horse_id": "H3", "final_rank": 1, "finish_time": 81.0, "deleted": 0},
+        {"id": 4, "race_id": "R2", "horse_id": "H4", "final_rank": 0, "finish_time": 81.4, "deleted": 0},
+        {"id": 5, "race_id": "R3", "horse_id": "H5", "final_rank": 0, "finish_time": 0.0, "deleted": 0},
+    ]
+
+
+def test_fetch_unranked_race_ids_returns_races_with_time_but_no_rank():
+    from core.feature_builder import fetch_unranked_race_ids
+    client = _RecordingClient(data=_entries_with_unranked_timed_row())
+    assert fetch_unranked_race_ids(client, "2026-07-01", "2026-07-31") == {"R2"}
+    assert ("eq", ("final_rank", 0)) in client.calls and ("gt", ("finish_time", 0)) in client.calls
+
+
+def test_fetch_race_entries_drops_races_with_unranked_timed_rows():
+    import main
+    client = _RecordingClient(data=_entries_with_unranked_timed_row()[:4])
+    args = SimpleNamespace(start_date="2026-07-01", end_date="2026-07-31")
+    with patch("main.get_client", return_value=client):
+        df = main._fetch_race_entries(args)
+    assert sorted(df["race_id"].unique()) == ["R1"]
+
+
+def test_load_historical_data_drops_races_with_unranked_timed_rows():
+    from scripts import _backtest_common
+    client = _RecordingClient(data=_entries_with_unranked_timed_row()[:4])
+    with patch.object(_backtest_common, "get_client", return_value=client):
+        df = _backtest_common.load_historical_data("2026-07-01", "2026-07-31")
+    assert sorted(df["race_id"].unique()) == ["R1"]
