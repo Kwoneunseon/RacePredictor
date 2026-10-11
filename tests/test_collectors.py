@@ -114,3 +114,92 @@ def test_fetch_seoul_common_api_queries_single_day(mocker):
     assert "meet=1" in url
     assert "rc_date=20260606" in url
     assert "rc_month" not in url
+
+
+def test_collecting_race_results_returns_first_collected_date(mocker):
+    from library import collector_races
+    mocker.patch.object(collector_races, "get_existing_master_data", return_value={})
+    mocker.patch.object(collector_races, "fetch_pages_sequential", return_value={
+        "race_entries": [{"race_date": "2026-10-03"}, {"race_date": "2026-10-02"}], "races": [{}]})
+    mocker.patch.object(collector_races, "save_normalized_data", return_value={"race_entries": 2})
+    assert collector_races.collecting_race_results(start_date="20261003", end_date="20261003") == "2026-10-02"
+
+
+def test_collecting_race_results_returns_none_when_nothing_collected(mocker):
+    from library import collector_races
+    mocker.patch.object(collector_races, "get_existing_master_data", return_value={})
+    mocker.patch.object(collector_races, "fetch_pages_sequential", return_value={})
+    assert collector_races.collecting_race_results(start_date="20261003", end_date="20261003") is None
+
+
+# ---------------------------------------------------------------------------
+# collector_races: 말 출생연도·성별·거세 확인일
+# ---------------------------------------------------------------------------
+
+def _obs(race_date, age, sex, horse_id="0047063"):
+    return {"horse_id": horse_id, "race_date": race_date, "age": age, "sex": sex}
+
+
+def test_parse_collects_horse_age_and_sex_from_common_api():
+    from library.collector_races import parse_and_normalize_race_data
+    item = {"rcDate": 20260606, "meet": "서울", "rcNo": 1, "hrNo": "0047063", "hrName": "말",
+            "jkNo": "080001", "trNo": "070001", "owNo": "010001", "chulNo": 3, "ord": 1,
+            "age": 4, "sex": "거"}
+    parsed = parse_and_normalize_race_data({"response": {"body": {"items": {"item": [item]}}}})
+    assert parsed["horse_obs"] == [
+        {"horse_id": "0047063", "race_date": "2026-06-06", "age": 4, "sex": "거"}]
+
+
+def test_summarize_horse_attrs_birth_year_and_first_gelded_date():
+    from library.collector_races import summarize_horse_attrs
+    attrs = summarize_horse_attrs([
+        _obs("2026-06-06", 5, "거"), _obs("2024-03-02", 3, "수"), _obs("2025-03-01", 4, "거"),
+    ])
+    assert attrs == [{"horse_id": "0047063", "birth_year": 2021,
+                      "gender": "거", "gelded_since": "2025-03-01"}]
+
+
+def test_summarize_horse_attrs_non_gelding_has_no_gelded_date():
+    from library.collector_races import summarize_horse_attrs
+    attrs = summarize_horse_attrs([_obs("2026-06-06", 3, "암")])
+    assert attrs[0]["gender"] == "암"
+    assert attrs[0]["gelded_since"] is None
+
+
+def test_save_horse_attrs_keeps_earlier_existing_gelded_date(mocker):
+    from library import collector_races
+    client = mocker.MagicMock()
+    client.table.return_value.select.return_value.in_.return_value.execute.return_value.data = [
+        {"horse_id": "0047063", "name": "DB이름", "gender": "거", "gelded_since": "2025-03-01"}]
+    mocker.patch.object(collector_races, "get_client", return_value=client)
+
+    collector_races.save_horse_attrs([
+        {"horse_id": "0047063", "birth_year": 2021, "gender": "수", "gelded_since": None}])
+
+    sent = client.table.return_value.upsert.call_args[0][0][0]
+    assert sent["gelded_since"] == "2025-03-01"
+    assert sent["gender"] == "거"
+    assert sent["name"] == "DB이름"
+
+
+def _save_attrs_with_existing(mocker, existing, attrs):
+    from library import collector_races
+    client = mocker.MagicMock()
+    client.table.return_value.select.return_value.in_.return_value.execute.return_value.data = existing
+    mocker.patch.object(collector_races, "get_client", return_value=client)
+    collector_races.save_horse_attrs(attrs)
+    return client.table.return_value.upsert
+
+
+def test_save_horse_attrs_keeps_gelding_without_gelded_date(mocker):
+    """마지막 출전 뒤에 거세된 말: DB는 '거', 경주 관측은 전부 '수'."""
+    upsert = _save_attrs_with_existing(
+        mocker, [{"horse_id": "A", "name": "말", "gender": "거", "gelded_since": None}],
+        [{"horse_id": "A", "birth_year": 2020, "gender": "수", "gelded_since": None}])
+    assert upsert.call_args[0][0][0]["gender"] == "거"
+
+
+def test_save_horse_attrs_skips_horses_not_in_db(mocker):
+    upsert = _save_attrs_with_existing(
+        mocker, [], [{"horse_id": "NEW", "birth_year": 2020, "gender": "수", "gelded_since": None}])
+    upsert.assert_not_called()

@@ -8,6 +8,7 @@ from Utils.ranks import valid_rank_mask
 logger = get_logger(__name__)
 
 CATEGORICAL_COLS = ["race_grade", "track_condition", "weather"]
+HORSE_AGE_FALLBACK = 4  # birth_year 없는 말의 나이 대체값(출전 행 중앙값 근사). 학습·예측 동일하게 쓰려고 상수로 둔다
 
 
 class RacePreprocessor:
@@ -111,7 +112,16 @@ class RacePreprocessor:
 
     def _add_derived_features(self, df: pd.DataFrame) -> pd.DataFrame:
         gender = df["gender"] if "gender" in df.columns else pd.Series([""] * len(df), index=df.index)
-        df["is_male"] = (gender == "수컷").astype(int)
+        df["is_male"] = (gender == "수").astype(int)  # DB 값은 수/암/거
+        df["is_gelding"] = (gender == "거").astype(int)  # 계산만 해 둔다 - FEATURE_COLUMNS 편입은 백테스트 검증 후
+
+        if "horse_age" in df.columns:
+            # 뒤의 일괄 fillna(0)에서 나이 0(불가능한 값)이 되지 않게 여기서 채운다
+            age = pd.to_numeric(df["horse_age"], errors="coerce")
+            n_missing = int(age.isna().sum())
+            if n_missing:
+                logger.warning(f"horse_age 결측 {n_missing}/{len(df)}건 → {HORSE_AGE_FALLBACK}세로 대체 (horses.birth_year 없음)")
+            df["horse_age"] = age.fillna(HORSE_AGE_FALLBACK)
 
         df["jockey_win_rate"] = df.get("jockey_total_wins", pd.Series(0, index=df.index)).fillna(0) / \
                                 (df.get("jockey_total_races", pd.Series(0, index=df.index)).fillna(0) + 1)

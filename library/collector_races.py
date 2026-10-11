@@ -296,6 +296,7 @@ def parse_and_normalize_race_data(api_response):
     races = []
     race_entries = []
     race_payouts = []  # 제주·부산경남 API의 plcOdds(연승 확정 배당) - bet_type='place'
+    horse_obs = []  # 공용 API의 말 나이·성별 관측(경주 시점 기준)
     master_data = {
         'horses': [],
         'jockeys': [],
@@ -428,6 +429,15 @@ def parse_and_normalize_race_data(api_response):
                         'finish_time': safe_float(item.get('rcTime')),  #완주기록(초)
                     })
 
+                    age, sex = safe_int(item.get('age')), safe_str(item.get('sex'))
+                    if age and sex:
+                        horse_obs.append({
+                            'horse_id': horse_id,
+                            'race_date': race_date,
+                            'age': age,
+                            'sex': sex,
+                        })
+
                     # 연승(place) 확정 배당 - 공용 API 응답에만 있는 plcOdds(말 개별
                     # 값). SeoulRace_1 응답에는 이 필드가 없어 자동으로 스킵된다.
                     plc_odds = safe_float(item.get('plcOdds'))
@@ -448,8 +458,56 @@ def parse_and_normalize_race_data(api_response):
         'races': races,
         'race_entries': race_entries,
         'race_payouts': race_payouts,
+        'horse_obs': horse_obs,
         'master_data': master_data
     }
+
+
+def summarize_horse_attrs(observations):
+    """말별 출생연도·성별·거세 확인일 요약. 성별은 수→거로만 바뀌므로 '거'가 한 번이라도 있으면 거세마다."""
+    attrs = {}
+    for o in observations:
+        a = attrs.setdefault(o['horse_id'], {
+            'horse_id': o['horse_id'],
+            'birth_year': None, 'gender': None, 'gelded_since': None,
+        })
+        a['birth_year'] = int(o['race_date'][:4]) - o['age']
+        if o['sex'] == '거':
+            a['gender'] = '거'
+            if a['gelded_since'] is None or o['race_date'] < a['gelded_since']:
+                a['gelded_since'] = o['race_date']
+        elif a['gender'] != '거':
+            a['gender'] = o['sex']
+    return list(attrs.values())
+
+
+def save_horse_attrs(attrs, batch_size=200):
+    """horses에 출생연도·성별·거세 확인일 반영. 이미 있는 말만 갱신하고, 거세 정보는 되돌리지 않는다."""
+    supabase = get_client()
+    saved = 0
+    for i in range(0, len(attrs), batch_size):
+        batch = attrs[i:i + batch_size]
+        try:
+            existing = supabase.table('horses').select('horse_id, name, gender, gelded_since')                .in_('horse_id', [a['horse_id'] for a in batch]).execute().data
+            current = {r['horse_id']: r for r in existing}
+            rows = []
+            for a in batch:
+                cur = current.get(a['horse_id'])
+                if cur is None:
+                    continue
+                p = cur['gelded_since']
+                if p and (a['gelded_since'] is None or p < a['gelded_since']):
+                    a['gelded_since'] = p
+                if cur['gender'] == '거' or a['gelded_since']:
+                    a['gender'] = '거'
+                # 교류경주에서는 이름에 [서울] 같은 접두가 붙어 오므로 DB 이름을 유지한다
+                rows.append({**a, 'name': cur['name']})
+            if rows:
+                supabase.table('horses').upsert(rows, on_conflict='horse_id').execute()
+            saved += len(rows)
+        except Exception as e:
+            logger.error(f"horses 나이·성별 저장 실패 (배치 {i // batch_size + 1}): {str(e)[:120]}")
+    return saved
 
 def filter_duplicates_in_race_and_entries(races, race_entries):
     """race, race_entries 리스트 내 중복 제거 (race_date + race_id + meet_code, entry_key 기준)"""
@@ -548,6 +606,10 @@ def save_normalized_data(data_dict, existing_master_data, batch_size=200):
     logger.info(f"마스터 데이터 추가 완료: 말 {master_saved_counts['horses']}마리, "
                f"기수 {master_saved_counts['jockeys']}명, "
                f"조교사 {master_saved_counts['trainers']}명")
+
+    horse_attrs = summarize_horse_attrs(data_dict.get('horse_obs', []))
+    if horse_attrs:
+        logger.info(f"horses 나이·성별 갱신: {save_horse_attrs(horse_attrs)}마리")
 
     # 2. 경주 관련 데이터 저장
     races, race_entries = filter_duplicates_in_race_and_entries(
@@ -707,6 +769,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
             'races': [],
             'race_entries': [],
             'race_payouts': [],
+            'horse_obs': [],
             'master_data': {
                 'horses': [],
                 'jockeys': [],
@@ -716,7 +779,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
         }
 
         for data in all_race_data:
-            for key in ['races', 'race_entries', 'race_payouts']:
+            for key in ['races', 'race_entries', 'race_payouts', 'horse_obs']:
                 combined_data[key].extend(data.get(key, []))
 
             # 마스터 데이터도 통합
@@ -729,7 +792,7 @@ def fetch_pages_sequential(start_page=1, max_pages=20, start_date=None, end_date
     return {}
 
 def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_date=datetime.now().strftime('%Y%m%d')):
-    """정규화된 구조로 경주 결과 수집 메인 함수"""
+    """정규화된 구조로 경주 결과 수집 메인 함수. 수집한 가장 이른 race_date를 반환(없으면 None)."""
     logger.info("경주 결과 수집을 시작합니다...")
 
     # 기존 마스터 데이터 캐시 생성
@@ -741,7 +804,7 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
 
     if not race_data or not race_data.get('race_entries'):
         logger.warning("수집된 경주 결과가 없습니다.")
-        return
+        return None
 
     total_entries = len(race_data.get('race_entries', []))
     total_races = len(race_data.get('races', []))
@@ -755,6 +818,9 @@ def collecting_race_results(start_page=1, max_pages=20, start_date=None, end_dat
         logger.info(f"경주 결과 수집 완료! 소요시간: {end_time - start_time:.2f}초")
     else:
         logger.error("경주 결과 저장 실패")
+        return None
+
+    return min(e['race_date'] for e in race_data['race_entries'])
 
 if __name__ == "__main__":
     import sys
@@ -778,4 +844,6 @@ if __name__ == "__main__":
     else:
         start = end = today
     logger.info(f"수집 기간: {start} ~ {end}")
-    collecting_race_results(start_page=1, max_pages=50, start_date=start, end_date=end)
+    first_date = collecting_race_results(start_page=1, max_pages=50, start_date=start, end_date=end)
+    from core.history_rebuilder import rebuild_after_collect
+    rebuild_after_collect(first_date)

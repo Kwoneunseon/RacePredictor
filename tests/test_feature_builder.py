@@ -20,7 +20,7 @@ def make_raw_entry(horse_id="H1", race_date="2026-06-07"):
         "trainer_id": "T001",
         "win_odds": 0,
         "finish_time": None,
-        "horses": {"name": "테스트마", "age": 4, "gender": "수컷", "rank": "국5"},
+        "horses": {"name": "테스트마", "age": 9, "birth_year": 2022, "gender": "수", "gelded_since": None, "rank": "국5"},
         "races": {
             "race_no": 1, "meet_code": 1, "race_distance": 1200,
             "total_horses": 8, "race_grade": "일반",
@@ -49,6 +49,58 @@ def test_flatten_entries_multiple_rows():
     df = fb.get_flatten_entries([make_raw_entry("H1"), make_raw_entry("H2")])
     assert len(df) == 2
     assert set(df["horse_id"]) == {"H1", "H2"}
+
+
+def _flatten_with_horse(race_date, horse):
+    from core.feature_builder import RaceFeatureBuilder
+    entry = make_raw_entry(race_date=race_date)
+    entry["horses"] = horse
+    return RaceFeatureBuilder.get_flatten_entries([entry]).iloc[0]
+
+
+@pytest.mark.parametrize("race_date,expected", [
+    ("2024-03-02", 2), ("2025-12-28", 3), ("2026-01-03", 4),
+])
+def test_flatten_horse_age_is_race_year_minus_birth_year(race_date, expected):
+    """horses.age(수집일 스냅샷)가 아니라 경주 연도 기준 나이여야 한다"""
+    row = _flatten_with_horse(race_date, {"age": 4, "birth_year": 2022, "gender": "암"})
+    assert row["horse_age"] == expected
+
+
+@pytest.mark.parametrize("horse", [
+    {"age": 5, "gender": "수"},                       # 컬럼 자체가 없음(백필 전)
+    {"age": 5, "gender": "수", "birth_year": None},   # 값이 NULL
+    None,                                             # horses 조인 실패
+])
+def test_flatten_horse_age_missing_birth_year_is_nan_not_zero_or_snapshot(horse):
+    row = _flatten_with_horse("2026-06-07", horse)
+    assert pd.isna(row["horse_age"])
+
+
+@pytest.mark.parametrize("race_date,gender,gelded_since,expected", [
+    ("2025-02-28", "거", "2025-03-01", "수"),   # 거세 전 경주
+    ("2025-03-01", "거", "2025-03-01", "거"),   # 거세 관측 당일
+    ("2026-06-07", "거", "2025-03-01", "거"),
+    ("2026-06-07", "거", None, "거"),           # 관측일 없으면 현재 값 그대로
+    ("2026-06-07", "수", None, "수"),
+    ("2026-06-07", "암", None, "암"),
+])
+def test_flatten_gender_is_gender_at_race_time(race_date, gender, gelded_since, expected):
+    row = _flatten_with_horse(race_date, {"birth_year": 2021, "gender": gender, "gelded_since": gelded_since})
+    assert row["gender"] == expected
+
+
+def test_build_for_prediction_uses_race_year_age_and_race_time_gender():
+    """예측 경로도 학습과 같은 정의(경주 연도 - birth_year, 경주 당시 성별)를 쓴다"""
+    entry = make_raw_entry("H1", race_date="2026-06-07")
+    entry["horses"] = {"name": "테스트마", "age": 9, "birth_year": 2021,
+                       "gender": "거", "gelded_since": "2026-08-01", "rank": "국5"}
+    with patch("core.feature_builder.get_client", return_value=make_mock_client([entry])), \
+         patch("library.scraper_odds.fetch_race_win_odds", return_value={}):
+        from core.feature_builder import RaceFeatureBuilder
+        result = RaceFeatureBuilder().build_for_prediction("2026-06-07")
+    assert result["horse_age"].iloc[0] == 5
+    assert result["gender"].iloc[0] == "수"
 
 
 # ──────────────────────────────────────────────

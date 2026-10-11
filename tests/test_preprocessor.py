@@ -12,7 +12,7 @@ def sample_df():
         "race_date": ["2025-01-01", "2025-01-01"],
         "final_rank": [1, 2],
         "horse_age": [4, 5],
-        "gender": ["수컷", "암컷"],
+        "gender": ["수", "암"],
         "horse_class": ["국5", "외3"],
         "race_distance": [1200, 1200],
         "total_horses": [8, 8],
@@ -64,7 +64,7 @@ def test_preprocessor_horse_class_num_defaults_for_no_digit():
         "race_date": ["2025-01-01"],
         "final_rank": [1],
         "horse_age": [4],
-        "gender": ["수컷"],
+        "gender": ["수"],
         "horse_class": ["나"],
         "race_distance": [1200],
         "total_horses": [8],
@@ -102,7 +102,7 @@ def test_preprocessor_prev_total_avg_rank_defaults_when_missing():
         "race_date": ["2025-01-01"],
         "final_rank": [1],
         "horse_age": [4],
-        "gender": ["수컷"],
+        "gender": ["수"],
         "horse_class": ["국5"],
         "race_distance": [1200],
         "total_horses": [8],
@@ -178,7 +178,7 @@ def test_preprocessor_rolling_recent_win_rate():
         "race_date": ["2025-01-05", "2025-01-10", "2025-02-20"],
         "final_rank": [1, 2, 1],
         "horse_age": [4, 4, 4],
-        "gender": ["수컷", "수컷", "수컷"],
+        "gender": ["수", "수", "수"],
         "horse_class": ["국5", "국5", "국5"],
         "race_distance": [1200, 1200, 1200],
         "total_horses": [8, 8, 8],
@@ -250,7 +250,7 @@ def test_preprocessor_horse_speed_at_distance_leak_safe():
         "race_date": ["2025-01-01", "2025-01-10", "2025-01-15", "2025-01-20"],
         "final_rank": [1, 1, 1, 1],
         "horse_age": [4, 4, 4, 4],
-        "gender": ["수컷"] * 4,
+        "gender": ["수"] * 4,
         "horse_class": ["국5"] * 4,
         "race_distance": [1200, 1200, 1400, 1200],
         "total_horses": [8, 8, 8, 8],
@@ -284,7 +284,7 @@ def test_preprocessor_horse_speed_at_distance_missing_finish_time():
         "race_date": ["2025-01-01"],
         "final_rank": [1],
         "horse_age": [4],
-        "gender": ["수컷"],
+        "gender": ["수"],
         "horse_class": ["국5"],
         "race_distance": [1200],
         "total_horses": [8],
@@ -315,7 +315,7 @@ def test_preprocessor_race_relative_no_race_id():
         "race_date": ["2025-01-01"],
         "final_rank": [1],
         "horse_age": [4],
-        "gender": ["수컷"],
+        "gender": ["수"],
         "horse_class": ["국5"],
         "race_distance": [1200],
         "total_horses": [8],
@@ -342,7 +342,7 @@ def _history_df(ranks):
         "race_date": [f"2025-01-{i + 1:02d}" for i in range(n)],
         "final_rank": ranks,
         "horse_age": [4] * n,
-        "gender": ["수컷"] * n,
+        "gender": ["수"] * n,
         "horse_class": ["국5"] * n,
         "race_distance": [1200] * n,
         "total_horses": [8] * n,
@@ -395,3 +395,49 @@ def test_fit_transform_keeps_valid_ranks_up_to_89():
     df = _history_df([1, 16, 89])
     result = RacePreprocessor().fit_transform(df)
     assert result["final_rank"].tolist() == [1, 16, 89]
+
+
+def _sex_age_df(genders, ages):
+    n = len(genders)
+    return pd.DataFrame({
+        "horse_id": [f"H{i}" for i in range(n)],
+        "race_id": ["R1"] * n,
+        "race_date": ["2025-01-01"] * n,
+        "final_rank": list(range(1, n + 1)),
+        "horse_age": ages,
+        "gender": genders,
+        "race_distance": [1200] * n,
+        "horse_weight": [480] * n,
+        "win_odds": [5.0] * n,
+    })
+
+
+def test_is_male_matches_db_gender_values():
+    """DB 성별 값은 수/암/거 - 예전 '수컷' 비교는 전부 0이었다"""
+    df = _sex_age_df(["수", "암", "거", None], [4, 4, 4, 4])
+    result = RacePreprocessor().fit_transform(df).sort_values("final_rank")
+    assert result["is_male"].tolist() == [1, 0, 0, 0]
+    assert result["is_gelding"].tolist() == [0, 0, 1, 0]
+
+
+def test_is_male_same_in_prediction_path():
+    df = _sex_age_df(["수", "암", "거"], [4, 4, 4]).drop(columns=["final_rank"])
+    result = RacePreprocessor().transform(df)
+    assert result["is_male"].tolist() == [1, 0, 0]
+
+
+def test_missing_horse_age_is_never_zero_after_fillna():
+    """birth_year 없는 말의 나이가 trainer의 일괄 fillna(0)에서 0이 되면 안 된다"""
+    from core.preprocessor import HORSE_AGE_FALLBACK
+    df = _sex_age_df(["수", "암", "거"], [3, None, np.nan])
+    p = RacePreprocessor()
+    fitted = p.fit_transform(df).sort_values("final_rank")
+    assert fitted["horse_age"].fillna(0).tolist() == [3, HORSE_AGE_FALLBACK, HORSE_AGE_FALLBACK]
+    predicted = p.transform(df.drop(columns=["final_rank"]))
+    assert predicted["horse_age"].fillna(0).tolist() == [3, HORSE_AGE_FALLBACK, HORSE_AGE_FALLBACK]
+
+
+def test_is_gelding_not_in_feature_columns_until_validated():
+    from config import FEATURE_COLUMNS
+    assert "is_male" in FEATURE_COLUMNS
+    assert "is_gelding" not in FEATURE_COLUMNS

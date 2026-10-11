@@ -36,6 +36,30 @@ def _fetch_in_batches(client, table: str, select_cols: str, in_col: str, values:
     return rows
 
 
+def drop_deleted_races(entries: list) -> list:
+    """학습/백테스트 전용. deleted=1 행이 하나라도 있는 경주는 통째로 뺀다(말만 빼면 1착 없는 경주가 남음)."""
+    bad = {e.get("race_id") for e in entries if e.get("deleted")}
+    return [e for e in entries if e.get("race_id") not in bad] if bad else entries
+
+
+def _age_at_race(birth_year, race_date):
+    """경주 당시 나이 = 경주 연도 - 출생연도(한국 경주마 나이 규칙). 모르면 None(0으로 만들지 않는다)."""
+    try:
+        return int(str(race_date)[:4]) - int(birth_year)
+    except (TypeError, ValueError):
+        return None
+
+
+def _gender_at_race(gender, gelded_since, race_date):
+    """경주 당시 성별. horses.gender는 현재 값이라 거세 전 경주에서는 '수'로 되돌린다."""
+    if gelded_since and race_date:
+        if str(race_date)[:10] >= str(gelded_since)[:10]:
+            return "거"
+        if gender == "거":
+            return "수"
+    return gender
+
+
 class RaceFeatureBuilder:
     """
     race_entries 기반 피처 수집 클래스.
@@ -100,8 +124,9 @@ class RaceFeatureBuilder:
             flat = {k: v for k, v in r.items() if not isinstance(v, dict)}
             h = r.get("horses") or {}
             flat["horse_name"] = h.get("name")
-            flat["horse_age"] = h.get("age")
-            flat["gender"] = h.get("gender")
+            # horses.age는 수집일 기준 스냅샷이라 과거 경주에 쓰면 틀린다 - 경주 연도 기준으로 계산
+            flat["horse_age"] = _age_at_race(h.get("birth_year"), r.get("race_date"))
+            flat["gender"] = _gender_at_race(h.get("gender"), h.get("gelded_since"), r.get("race_date"))
             flat["horse_class"] = h.get("rank")
             rc = r.get("races") or {}
             flat["race_no"] = rc.get("race_no")
