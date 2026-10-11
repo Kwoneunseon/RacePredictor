@@ -446,3 +446,71 @@ def test_fetch_running_style_for_training_excludes_non_finish_ranks():
     with patch("core.feature_builder.get_client", return_value=client):
         result = fb._fetch_running_style_for_training(df)
     assert result["running_style_score"].iloc[0] == pytest.approx(3.0)
+
+
+# ──────────────────────────────────────────────
+# 속도 피처 학습/예측 경로 정의 일치
+# ──────────────────────────────────────────────
+def _speed_history(finish_times, target_finish_time=70.0):
+    """H1의 과거 경주(2026-01-01부터 하루 간격) + 대상 경주(2026-06-07) 학습용 df."""
+    dates = [f"2026-01-{i + 1:02d}" for i in range(len(finish_times))] + ["2026-06-07"]
+    return pd.DataFrame({
+        "horse_id": ["H1"] * len(dates),
+        "race_date": dates,
+        "finish_time": list(finish_times) + [target_finish_time],
+        "race_distance": [1200] * len(dates),
+    })
+
+
+def _serving_speed_features(train_df):
+    from core.feature_builder import RaceFeatureBuilder
+    past = train_df[train_df["race_date"] < "2026-06-07"]
+    rows = [{
+        "horse_id": r.horse_id, "race_date": r.race_date,
+        "finish_time": None if pd.isna(r.finish_time) else r.finish_time,
+        "races": {"race_distance": r.race_distance},
+    } for r in past.itertuples()]
+    client = _RecordingClient({"race_entries": rows})
+    return RaceFeatureBuilder()._fetch_speed_features(
+        pd.DataFrame({"horse_id": ["H1"]}), "2026-06-07", client).iloc[0]
+
+
+def _training_speed_features(train_df):
+    from core.feature_builder import RaceFeatureBuilder
+    result = RaceFeatureBuilder()._fetch_speed_features_for_training(train_df.copy())
+    return result[result["race_date"] == "2026-06-07"].iloc[0]
+
+
+@pytest.mark.parametrize("finish_times", [
+    [80.0, None],                     # 직전 경주 기록 없음, 그 전 경주 기록 있음
+    [80.0, 78.0, None, 75.0, None],   # 기록 없는 경주가 사이사이 낀 경우
+    [80.0, 78.0, 76.0, 0],            # 0은 기록 없음
+    [80.0, 78.0, 76.0, 74.0],         # 결측 없음
+    [None, None],                     # 기록 전무
+    [],                               # 데뷔전
+])
+def test_speed_features_training_matches_serving(finish_times):
+    train_df = _speed_history(finish_times)
+    serving = _serving_speed_features(train_df)
+    training = _training_speed_features(train_df)
+    assert training["prev_speed_figure"] == pytest.approx(serving["prev_speed_figure"])
+    assert training["speed_figure_trend"] == pytest.approx(serving["speed_figure_trend"])
+
+
+def test_speed_features_training_uses_latest_recorded_race():
+    training = _training_speed_features(_speed_history([80.0, 78.0, None, 75.0, None]))
+    assert training["prev_speed_figure"] == pytest.approx(1200 / 75.0)
+    expected = np.polyfit(np.arange(3), [1200 / 80.0, 1200 / 78.0, 1200 / 75.0], 1)[0]
+    assert training["speed_figure_trend"] == pytest.approx(expected)
+
+
+def test_speed_features_training_ignores_own_and_later_races():
+    """대상 경주 자신과 이후 경주의 기록이 바뀌어도 값이 같아야 한다(누수 방지)."""
+    base = _speed_history([80.0, None], target_finish_time=70.0)
+    later = pd.DataFrame({"horse_id": ["H1"], "race_date": ["2026-07-01"],
+                          "finish_time": [60.0], "race_distance": [1200]})
+    changed = pd.concat([_speed_history([80.0, None], target_finish_time=50.0), later], ignore_index=True)
+    a, b = _training_speed_features(base), _training_speed_features(changed)
+    assert a["prev_speed_figure"] == pytest.approx(1200 / 80.0)
+    assert b["prev_speed_figure"] == pytest.approx(1200 / 80.0)
+    assert a["speed_figure_trend"] == b["speed_figure_trend"] == 0.0

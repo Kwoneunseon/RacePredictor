@@ -521,14 +521,16 @@ class RaceFeatureBuilder:
         spd_df["race_distance"] = pd.to_numeric(spd_df["race_distance"], errors="coerce")
         spd_df = spd_df.sort_values(["horse_id", "race_date"]).reset_index(drop=True)
         spd_df["_speed"] = spd_df["race_distance"] / spd_df["finish_time"].replace(0, np.nan)
+        # 예측 경로와 같은 정의: 기록 있는 가장 최근 과거 경주
         spd_df["prev_speed_figure"] = spd_df.groupby("horse_id")["_speed"].shift(1)
+        spd_df["prev_speed_figure"] = spd_df.groupby("horse_id")["prev_speed_figure"].ffill()
 
         def _speed_slope(s):
             arr = s.values
             out = np.zeros(len(arr))
             for i in range(len(arr)):
-                past = arr[max(0, i - 3):i]
-                past = past[~np.isnan(past)]
+                past = arr[:i]
+                past = past[~np.isnan(past)][-3:]
                 if len(past) >= 2:
                     out[i] = float(np.polyfit(np.arange(len(past)), past, 1)[0])
             return pd.Series(out, index=s.index)
