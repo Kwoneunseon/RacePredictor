@@ -70,8 +70,6 @@ FEATURE_COLUMNS = [
     "win_rate_vs_mean",
     # 최근 성적 (30일)
     "jockey_recent_win_rate", "trainer_recent_win_rate",
-    # 조교 상태
-    "training_grade_enc",
     # 컨디션/체중
     "days_since_last_race", "horse_weight_diff",
     # 거리·경마장·조합 특화 승률

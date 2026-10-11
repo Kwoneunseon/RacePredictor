@@ -37,7 +37,6 @@ FEATURE_LABELS_KO = {
     "win_rate_vs_mean": "경주 내 평균 대비 승률 우위",
     "jockey_recent_win_rate": "기수 최근 30일 승률",
     "trainer_recent_win_rate": "조교사 최근 30일 승률",
-    "training_grade_enc": "조교 등급(인코딩)",
     "days_since_last_race": "직전 경주 이후 경과일",
     "horse_weight_diff": "직전 대비 체중 변화량",
     "horse_win_rate_at_distance": "해당 거리 승률",

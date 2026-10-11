@@ -24,8 +24,6 @@ class RacePreprocessor:
         df = self._add_rolling_recent_rates(df)
         df = self._add_historical_performance_features(df)
         df = self._add_new_features(df)
-        if "training_grade_enc" not in df.columns:
-            df["training_grade_enc"] = 0.0
         df = self._add_race_relative_features(df)
         df = self._encode_categoricals(df, fit=True)
         self._fitted = True
@@ -39,8 +37,6 @@ class RacePreprocessor:
             df["jockey_recent_win_rate"] = 0.0
         if "trainer_recent_win_rate" not in df.columns:
             df["trainer_recent_win_rate"] = 0.0
-        if "training_grade_enc" not in df.columns:
-            df["training_grade_enc"] = 0.0
         if "days_since_last_race" not in df.columns:
             df["days_since_last_race"] = 60
         if "horse_weight_diff" not in df.columns:

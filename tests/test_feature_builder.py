@@ -5,29 +5,6 @@ from unittest.mock import MagicMock, patch
 
 
 # ──────────────────────────────────────────────
-# _training_grade 단위 테스트 (DB 불필요)
-# ──────────────────────────────────────────────
-def test_training_grade_양호():
-    from core.feature_builder import _training_grade
-    assert _training_grade("양호") == 2
-
-
-def test_training_grade_불량():
-    from core.feature_builder import _training_grade
-    assert _training_grade("불량") == 0
-
-
-def test_training_grade_빈문자():
-    from core.feature_builder import _training_grade
-    assert _training_grade("") == 1
-
-
-def test_training_grade_일반():
-    from core.feature_builder import _training_grade
-    assert _training_grade("보통") == 1
-
-
-# ──────────────────────────────────────────────
 # get_flatten_entries 단위 테스트 (DB 불필요)
 # ──────────────────────────────────────────────
 def make_raw_entry(horse_id="H1", race_date="2026-06-07"):
@@ -125,7 +102,7 @@ def test_build_for_prediction_returns_required_columns():
 
     required = [
         "horse_id", "horse_name", "meet_code", "race_distance",
-        "prev_win_odds", "current_win_odds", "training_grade_enc",
+        "prev_win_odds", "current_win_odds",
         "days_since_last_race", "prev_speed_figure", "speed_figure_trend",
         "assigned_weight",
     ]
@@ -147,7 +124,6 @@ def test_build_for_prediction_fallback_values():
     assert result["prev_win_odds"].iloc[0] == 15.0
     # 스크래핑 실패 시 current_win_odds = prev_win_odds
     assert result["current_win_odds"].iloc[0] == 15.0
-    assert result["training_grade_enc"].iloc[0] == 1.0
     assert result["days_since_last_race"].iloc[0] == 60
     assert result["prev_speed_figure"].iloc[0] == 0.0
     # race_entry_detail에 매칭되는 행 없음 → 기본 폴백값 56.0

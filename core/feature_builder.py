@@ -36,18 +36,6 @@ def _fetch_in_batches(client, table: str, select_cols: str, in_col: str, values:
     return rows
 
 
-def _training_grade(remk_txt: str) -> int:
-    """조교 평가 텍스트 → 수치 등급. 양호=2, 기록없음=1, 불량계열=0"""
-    s = str(remk_txt).strip()
-    if not s:
-        return 1
-    if "불량" in s:
-        return 0
-    if "양호" in s:
-        return 2
-    return 1
-
-
 class RaceFeatureBuilder:
     """
     race_entries 기반 피처 수집 클래스.
@@ -81,7 +69,6 @@ class RaceFeatureBuilder:
 
         df = self._fetch_weights(df, race_date, client)
         df = self._fetch_recent_rates(df, race_date, client)
-        df = self._fetch_training_grades(df, race_date, client)
         df = self._fetch_history(df, race_date, client)
         df = self._fetch_last_race_features(df, race_date, client)
         df = self._fetch_prev_odds(df, race_date, client)
@@ -98,7 +85,6 @@ class RaceFeatureBuilder:
         client = get_client()
 
         df = self._fetch_history_for_training(df, end_date, client)
-        df = self._fetch_training_grades_for_training(df, client)
         df = self._fetch_prev_odds_for_training(df)
         df = self._fetch_speed_features_for_training(df)
         df = self._fetch_assigned_weight_for_training(df)
@@ -182,30 +168,6 @@ class RaceFeatureBuilder:
         else:
             df["jockey_recent_win_rate"] = 0.0
             df["trainer_recent_win_rate"] = 0.0
-        return df
-
-    def _fetch_training_grades(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
-        if "horse_name" not in df.columns:
-            df["training_grade_enc"] = 1.0
-            return df
-        horse_names = df["horse_name"].dropna().unique().tolist()
-        cutoff = (pd.to_datetime(race_date) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
-        res = client.table("horse_training_sessions")\
-            .select("hrnm, remk_txt")\
-            .in_("hrnm", horse_names)\
-            .gte("trng_dt", cutoff).lt("trng_dt", race_date)\
-            .execute()
-        if res.data:
-            grade_map: dict = {}
-            for row in res.data:
-                name = row["hrnm"]
-                grade = _training_grade(row.get("remk_txt", ""))
-                grade_map[name] = min(grade_map.get(name, 2), grade)
-            df["training_grade_enc"] = df["horse_name"].apply(
-                lambda n: float(grade_map.get(n, 1))
-            )
-        else:
-            df["training_grade_enc"] = 1.0
         return df
 
     def _fetch_history(self, df: pd.DataFrame, race_date: str, client) -> pd.DataFrame:
@@ -505,50 +467,6 @@ class RaceFeatureBuilder:
         )
         df = merged.drop(columns=["_race_dt"])
         logger.info(f"horse_race_history 조인 완료: {len(all_hist)}개 행")
-        return df
-
-    def _fetch_training_grades_for_training(self, df: pd.DataFrame, client) -> pd.DataFrame:
-        horse_names = df["horse_name"].dropna().unique().tolist() if "horse_name" in df.columns else []
-        if not horse_names:
-            df["training_grade_enc"] = 1.0
-            return df
-        tr_all_data = []
-        for i in range(0, len(horse_names), 100):
-            res = client.table("horse_training_sessions")\
-                .select("hrnm, remk_txt, trng_dt")\
-                .in_("hrnm", horse_names[i:i + 100]).execute()
-            if res.data:
-                tr_all_data.extend(res.data)
-
-        if not tr_all_data:
-            df["training_grade_enc"] = 1.0
-            return df
-
-        tr_df = pd.DataFrame(tr_all_data)
-        tr_df["trng_dt"] = pd.to_datetime(tr_df["trng_dt"])
-        tr_df["_grade"] = tr_df["remk_txt"].apply(_training_grade)
-        df["_race_dt"] = pd.to_datetime(df["race_date"])
-
-        grade_rows = []
-        for _, row in df[["horse_name", "_race_dt"]].drop_duplicates().iterrows():
-            name, race_dt = row["horse_name"], row["_race_dt"]
-            cutoff = race_dt - pd.Timedelta(days=7)
-            sub = tr_df[
-                (tr_df["hrnm"] == name)
-                & (tr_df["trng_dt"] >= cutoff)
-                & (tr_df["trng_dt"] < race_dt)
-            ]
-            grade_rows.append({
-                "horse_name": name,
-                "_race_dt": race_dt,
-                "training_grade_enc": float(int(sub["_grade"].min()) if len(sub) else 1),
-            })
-
-        grade_df = pd.DataFrame(grade_rows)
-        df = df.merge(grade_df, on=["horse_name", "_race_dt"], how="left")
-        df["training_grade_enc"] = df["training_grade_enc"].fillna(1.0)
-        df = df.drop(columns=["_race_dt"])
-        logger.info(f"조교 등급 조인 완료: {(df['training_grade_enc'] != 1).sum()}건 반영")
         return df
 
     def _fetch_prev_odds_for_training(self, df: pd.DataFrame) -> pd.DataFrame:
